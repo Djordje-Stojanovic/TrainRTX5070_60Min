@@ -3,7 +3,7 @@
 ## MANDATORY RULES (read these FIRST, violating ANY is a critical bug)
 
 1. **NEVER `git reset --hard`** — to discard, revert only train.py: `git checkout <commit> -- train.py`
-2. **NEVER poll training** — use `sleep 300` (timeout: 310000) between checks, max 5 checks per run
+2. **NEVER poll training** — first check after `sleep 300` (5 min), then `sleep 600` (10 min) between checks, max 8 checks per run
 3. **ALWAYS follow the post-experiment checklist** (below) — no exceptions, no skipping steps
 4. **ALWAYS push after every experiment** — `git push origin autoresearch/mar10`
 5. **NEVER stop the loop** — run experiments forever until manually interrupted
@@ -129,12 +129,13 @@ Training takes ~65 min total (60 min training + ~5 min startup/compile/eval).
 
 **Protocol:**
 1. Run training in background: `uv run train.py > run.log 2>&1` (use `run_in_background`)
-2. **`sleep 300`** (5 min) — use bash `sleep`, with `timeout: 310000`
-3. Check: `grep "^val_bpb:" run.log 2>/dev/null || echo "NOT DONE"`
-4. If not done, **`sleep 300`** again. Repeat until done.
-5. When done, extract all metrics with one grep.
+2. **`sleep 300`** (5 min) — use bash `sleep`, with `timeout: 310000` — first check is early to catch startup crashes
+3. Check: `grep "^val_bpb:" run.log 2>/dev/null || tail -1 run.log` — if crashed, you'll see the error immediately
+4. If not done and no error, **`sleep 600`** (10 min) — use bash `sleep`, with `timeout: 610000`
+5. Repeat step 3-4 until training finishes (~60 min). When eval starts, **`sleep 300`** (5 min) for eval to complete.
+6. When done, extract all metrics with one grep.
 
-Max ~15 checks per run. Calibrate: if runs take ~65 min, first sleep can be 30 min.
+Max ~8 checks per run (1x5min + ~6x10min + 1x5min = ~70min covers full run).
 
 ## Bottleneck-First Rule
 
