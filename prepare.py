@@ -32,7 +32,7 @@ import torch
 
 MAX_SEQ_LEN = 2048          # context length
 TIME_BUDGET = 3600          # training time budget in seconds (60 minutes)
-EVAL_TOKENS = 20 * 524288   # number of tokens for validation eval
+EVAL_TOKENS = 40 * 524288   # number of tokens for validation eval (~21M tokens)
 VOCAB_SIZE = 8192           # TinyStories vocab size (ClimbMix uses GPT-2: 50257)
 
 # BPE split pattern (GPT-4 style, with \p{N}{1,2} instead of {1,3})
@@ -595,8 +595,9 @@ def _list_climbmix_shards(dataset_name="climbmix"):
 def _iter_climbmix_tokens(split, dataset_name="climbmix", shuffle_seed=None):
     """Yield pre-tokenized documents from ClimbMix parquet shards.
 
-    Each document is a list of token IDs (ints). For val split, uses last shard.
-    For train split, uses all shards except the last.
+    Each document is a list of token IDs (ints). For val split, uses last 2 shards
+    (interleaved with fixed seed for diverse, reproducible eval).
+    For train split, uses all shards except the last 2.
     If shuffle_seed is not None, shuffles documents within each shard to avoid
     topic-clustered ordering that can cause training instability.
     """
@@ -606,14 +607,40 @@ def _iter_climbmix_tokens(split, dataset_name="climbmix", shuffle_seed=None):
             "No ClimbMix shards found. Run prepare.py --dataset climbmix first."
         )
 
+    num_val_shards = min(2, len(shard_paths))
     if split == "val":
-        # Use last downloaded shard for validation
-        shard_paths = shard_paths[-1:]
+        # Use last 2 downloaded shards for validation (diverse eval)
+        shard_paths = shard_paths[-num_val_shards:]
     elif split == "train":
-        # Use all shards except last for training
-        if len(shard_paths) > 1:
-            shard_paths = shard_paths[:-1]
-        # If only 1 shard, use it for both train and val (not ideal but functional)
+        # Use all shards except last 2 for training
+        if len(shard_paths) > num_val_shards:
+            shard_paths = shard_paths[:-num_val_shards]
+        # If only 1-2 shards, use them for both train and val (not ideal but functional)
+
+    # For val: load all documents from all val shards, interleave with fixed seed
+    if split == "val" and len(shard_paths) > 1:
+        all_rows = []
+        for shard_path in shard_paths:
+            try:
+                table = pq.read_table(shard_path)
+            except Exception as exc:
+                print(f"Warning: could not read {shard_path}: {exc}")
+                continue
+            col_name = None
+            for candidate in ("tokens", "input_ids", "text"):
+                if candidate in table.column_names:
+                    col_name = candidate
+                    break
+            if col_name is None:
+                continue
+            column = table.column(col_name)
+            all_rows.extend(row for row in column.to_pylist() if isinstance(row, list))
+        # Fixed seed shuffle for reproducible eval across runs
+        rng = random.Random(42)
+        rng.shuffle(all_rows)
+        for row in all_rows:
+            yield row
+        return
 
     for shard_idx, shard_path in enumerate(shard_paths):
         try:
