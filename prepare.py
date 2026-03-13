@@ -31,7 +31,7 @@ import torch
 # ---------------------------------------------------------------------------
 
 MAX_SEQ_LEN = 2048          # context length
-TIME_BUDGET = 1200          # training time budget in seconds (20 minutes)
+TIME_BUDGET = 3600          # training time budget in seconds (60 minutes)
 EVAL_TOKENS = 20 * 524288   # number of tokens for validation eval
 VOCAB_SIZE = 8192           # TinyStories vocab size (ClimbMix uses GPT-2: 50257)
 

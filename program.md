@@ -22,7 +22,7 @@ Once you get confirmation, kick off the experimentation.
 
 ## Experimentation
 
-Each experiment runs on a single RTX 5070 (12GB). The training script runs for a **fixed time budget of 20 minutes** (wall clock training time, excluding startup/compilation). You launch it simply as: `uv run train.py`.
+Each experiment runs on a single RTX 5070 (12GB). The training script runs for a **fixed time budget of 60 minutes** (wall clock training time, excluding startup/compilation). You launch it simply as: `uv run train.py`.
 
 **What you CAN change** (see `CLAUDE.md` for details):
 - `train.py` — primary edit target. Architecture, optimizer, hyperparameters, training loop, batch size, model size. Everything is fair game.
@@ -30,14 +30,14 @@ Each experiment runs on a single RTX 5070 (12GB). The training script runs for a
 - `pyproject.toml` — add a dependency only if it enables a real optimization.
 
 **Fairness invariants** (DO NOT change these — they make experiments comparable):
-- `TIME_BUDGET = 1200` (20 minutes)
+- `TIME_BUDGET = 3600` (60 minutes)
 - `MAX_SEQ_LEN = 2048`
 - `evaluate_bpb()` function definition
 - Dataset identity (ClimbMix) and tokenizer (GPT-2, vocab 50257)
 - Validation split data
-- **URGENT — Minimum model size: ~200M params.** From now on, DO NOT shrink the model below ~200M params. Experiments #35, #58 definitively proved smaller models are worse. Increasing above ~200M is allowed. Decreasing is FORBIDDEN.
+- **URGENT — Minimum model size: ~200M params.** DO NOT shrink the model below ~200M params. Prior research (68 experiments at 20-min budget) definitively proved smaller models are worse. Increasing above ~200M is allowed. Decreasing is FORBIDDEN.
 
-**The goal is simple: get the lowest val_bpb on ClimbMix.** Since the time budget is fixed, you don't need to worry about training time — it's always 20 minutes. Everything else is fair game: change the architecture, the optimizer, the hyperparameters, the batch size, the model size. The only constraint is that the code runs without crashing and finishes within the time budget.
+**The goal is simple: get the lowest val_bpb on ClimbMix.** Since the time budget is fixed, you don't need to worry about training time — it's always 60 minutes. Everything else is fair game: change the architecture, the optimizer, the hyperparameters, the batch size, the model size. The only constraint is that the code runs without crashing and finishes within the time budget.
 
 **VRAM** is a hard constraint at 12GB. The autotune system handles batch sizing automatically. If your architecture change OOMs at all batch sizes, scale back.
 
@@ -54,7 +54,7 @@ Once the script finishes it prints a summary like this:
 ```
 ---
 val_bpb:          0.997900
-training_seconds: 1200.1
+training_seconds: 3600.1
 total_seconds:    1325.9
 peak_vram_mb:     7000.5
 eval_vram_mb:     4500.3
@@ -70,7 +70,7 @@ dataset:          climbmix
 
 **MFU caveat:** `mfu_percent` is measured against **BF16 peak FLOPS** (~65.6 TFLOPS), but training uses MXFP8 which has ~4x higher theoretical peak. Reported MFU values (80-90%) are relative to BF16 only — useful for comparing experiments, not as absolute efficiency. Do not change the benchmark mid-run.
 
-Note that the script is configured to always stop after 20 minutes. You can extract the key metrics from the log file:
+Note that the script is configured to always stop after 60 minutes. You can extract the key metrics from the log file:
 
 ```
 grep "^val_bpb:\|^peak_vram_mb:\|^mfu_percent:" run.log
@@ -91,7 +91,7 @@ commit	val_bpb	memory_gb	mfu	tok_per_sec	num_steps	num_params_M	batch_size	final
 3. peak training VRAM in GB, round to .1f (e.g. 7.0 — divide peak_vram_mb by 1024) — use 0.0 for crashes
 4. mfu percent (e.g. 24.3) — GPU compute efficiency — use 0.0 for crashes
 5. tok_per_sec — throughput (e.g. 37000) — use 0 for crashes
-6. num_steps — optimizer steps completed in 20 min — use 0 for crashes
+6. num_steps — optimizer steps completed in 60 min — use 0 for crashes
 7. num_params_M — model parameter count in millions (e.g. 162.1) — use 0.0 for crashes
 8. batch_size — device batch size selected by autotune — use 0 for crashes
 9. final_loss — training loss at last step (e.g. 1.850) — use 0.000 for crashes
@@ -127,10 +127,10 @@ LOOP FOREVER:
 
 The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).
 
-**Timeout**: Each experiment should take ~20 minutes total (+ a few minutes for startup/compilation and eval overhead). If a run exceeds 30 minutes, kill it and treat it as a failure (discard and revert).
+**Timeout**: Each experiment should take ~60 minutes total (+ a few minutes for startup/compilation and eval overhead). If a run exceeds 75 minutes, kill it and treat it as a failure (discard and revert).
 
 **Crashes**: If a run crashes (OOM, or a bug, or etc.), use your judgment: If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If the idea itself is fundamentally broken, just skip it, log "crash" as the status in the tsv, and move on.
 
 **NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers referenced in the code, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
 
-As an example use case, a user might leave you running while they sleep. If each experiment takes you ~20 minutes then you can run approx 3/hour, for a total of about 24 over the duration of the average human sleep. The user then wakes up to experimental results, all completed by you while they slept!
+As an example use case, a user might leave you running while they sleep. If each experiment takes you ~65 minutes then you can run approx 1/hour, for a total of about 8 over the duration of the average human sleep. The user then wakes up to experimental results, all completed by you while they slept!

@@ -1,10 +1,10 @@
-# TrainRTX5070
+# TrainRTX5070_60Min
 
 > Autonomous LLM pretraining research on a single RTX 5070.
 
 ![progress](progress.png)
 
-*AI agent runs experiments autonomously: modify code, train for 20 minutes, check if val_bpb improved, keep or discard, repeat. You sleep, it researches.*
+*AI agent runs experiments autonomously: modify code, train for 60 minutes, check if val_bpb improved, keep or discard, repeat. You sleep, it researches.*
 
 ## Start the AI agent
 
@@ -26,7 +26,7 @@ while ($true) { Clear-Host; Get-Content results.tsv -Tail 10; Start-Sleep 30 }  
 
 ## How it works
 
-The AI agent loops forever: change code, train 20 minutes, measure val_bpb (bits per byte), keep if improved, discard if not. Each experiment is logged in `results.tsv` with full metrics (val_bpb, MFU, throughput, VRAM, model size). The progress chart updates automatically.
+The AI agent loops forever: change code, train 60 minutes, measure val_bpb (bits per byte), keep if improved, discard if not. Each experiment is logged in `results.tsv` with full metrics (val_bpb, MFU, throughput, VRAM, model size). The progress chart updates automatically.
 
 | Component | Details |
 |-----------|---------|
@@ -35,7 +35,7 @@ The AI agent loops forever: change code, train 20 minutes, measure val_bpb (bits
 | Dataset | ClimbMix (nvidia/Nemotron-ClimbMix), GPT-2 tokenizer |
 | Optimizer | Muon (matrices) + AdamW (embeddings) |
 | MFU | ~53-58% (runtime benchmarked, not hardcoded) |
-| Time budget | 20 minutes per experiment (~3 experiments/hour) |
+| Time budget | 60 minutes per experiment (~1 experiment/hour) |
 | Metric | val_bpb — lower is better |
 
 ## Project structure
@@ -66,14 +66,14 @@ uv run prepare.py --dataset climbmix
 # Smoke test (~2 min first time due to torch.compile, ~30s after)
 uv run train.py --smoke-test
 
-# Manual training run (~20 min)
+# Manual training run (~60 min)
 uv run train.py
 ```
 
 ## Design
 
 - **Primary file to modify.** The AI primarily edits `train.py` (model + training loop). `prepare.py` dataloader changes are allowed but fairness-locked metrics are not.
-- **Fixed 20-minute budget.** Every experiment gets exactly 20 minutes of training. This makes results comparable regardless of what the AI changes (model size, batch, architecture).
+- **Fixed 60-minute budget.** Every experiment gets exactly 60 minutes of training. This makes results comparable regardless of what the AI changes (model size, batch, architecture).
 - **Fairness invariants.** Time budget, sequence length, tokenizer, dataset, and eval function are locked. The AI optimizes the model and training, not the measurement.
 - **Self-contained.** One GPU, one file, one metric. No distributed training, no complex configs.
 

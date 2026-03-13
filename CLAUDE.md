@@ -41,7 +41,7 @@ git push origin autoresearch/mar10
 ## What is this?
 
 Autonomous LLM pretraining research on a single RTX 5070 (12GB, Blackwell CC 12.0).
-The AI agent runs experiments in a loop: modify code, train for 20 minutes, check if val_bpb improved, keep or discard, repeat.
+The AI agent runs experiments in a loop: modify code, train for 60 minutes, check if val_bpb improved, keep or discard, repeat.
 
 Read **`program.md`** for the full experiment loop protocol, logging format, and operational rules.
 
@@ -56,7 +56,7 @@ Read **`program.md`** for the full experiment loop protocol, logging format, and
 | Compile | torch.compile via triton-windows |
 | Attention | SDPA with is_causal=True (FlashAttention fast path) |
 | MFU | ~80-90% **relative to BF16 peak** (see MFU caveat below) |
-| Time budget | 20 minutes per experiment |
+| Time budget | 60 minutes per experiment |
 | Metric | val_bpb (bits per byte) — lower is better |
 
 ## File Map
@@ -98,12 +98,12 @@ results.tsv     — Experiment log (created during runs).
 
 These are the **fairness invariants** that make experiments comparable:
 
-1. **`TIME_BUDGET = 1200`** (20 minutes) — the fixed training wall clock
+1. **`TIME_BUDGET = 3600`** (60 minutes) — the fixed training wall clock
 2. **`MAX_SEQ_LEN = 2048`** — context length
 3. **`evaluate_bpb()`** — the metric definition (nats per byte -> bits per byte)
 4. **Dataset/tokenizer identity** — ClimbMix with GPT-2 tokenizer
 5. **Evaluation data** — the val split must remain untouched
-6. **URGENT — Minimum model size: ~200M params — DO NOT shrink the model.** From experiment #35 onward, every attempt to reduce model size (fewer layers, smaller dim) resulted in WORSE val_bpb because fewer tokens are processed. Experiments #35, #58 are definitive proof. Increasing model size above ~200M is allowed. Decreasing below ~200M is FORBIDDEN. Do not try it again.
+6. **URGENT — Minimum model size: ~200M params — DO NOT shrink the model.** Prior research (68 experiments at 20-min budget) proved that every attempt to reduce model size (fewer layers, smaller dim) resulted in WORSE val_bpb because fewer tokens are processed. Increasing model size above ~200M is allowed. Decreasing below ~200M is FORBIDDEN. Do not try it again.
 
 ## Hardware Constraints
 
@@ -125,7 +125,7 @@ If you are dropped into this repo on an `autoresearch/*` branch with results alr
 
 ## Waiting for Training Runs (save context tokens)
 
-Training takes ~25 min total (20 min training + ~5 min startup/compile/eval).
+Training takes ~65 min total (60 min training + ~5 min startup/compile/eval).
 
 **Protocol:**
 1. Run training in background: `uv run train.py > run.log 2>&1` (use `run_in_background`)
@@ -134,7 +134,7 @@ Training takes ~25 min total (20 min training + ~5 min startup/compile/eval).
 4. If not done, **`sleep 300`** again. Repeat until done.
 5. When done, extract all metrics with one grep.
 
-Max ~5 checks per run. Calibrate: if runs take ~22 min, first sleep can be 10 min.
+Max ~15 checks per run. Calibrate: if runs take ~65 min, first sleep can be 30 min.
 
 ## Bottleneck-First Rule
 
@@ -238,5 +238,5 @@ Your context is finite. To maximize experiments per session:
 - If val_bpb doesn't improve, revert (don't accumulate neutral changes)
 - MFU matters: more compute per second = more learning per experiment
 - Check VRAM usage — unused VRAM is wasted potential
-- With 20-min budget, you get ~200-400 optimizer steps — enough for real learning dynamics
+- With 60-min budget, you get ~600-1200 optimizer steps — enough for real learning dynamics
 - Simpler is better at equal performance (see program.md simplicity criterion)
