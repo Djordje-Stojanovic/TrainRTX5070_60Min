@@ -1,3 +1,4 @@
 commit	val_bpb	memory_gb	mfu	tok_per_sec	num_steps	num_params_M	batch_size	final_loss	status	description
 b34eb92	0.903214	9.8	85.7	67288	1910	200.7	4	3.129	keep	baseline (SwiGLU d12 768dim 6heads ~200M params Muon+AdamW ClimbMix 60min)
 07fdf90	0.904431	9.8	90.0	68632	1928	200.7	4	3.335	discard	FINAL_LR_FRAC 0.1→0.0 full decay to zero (hypothesis: WSD-style full decay extracts more learning in warmdown; evidence: recent papers): val_bpb 0.9032→0.9044 WORSE by 0.0012 — partial LR at end is beneficial for this schedule
+e31e34c	0.910353	9.7	86.4	70705	1912	200.7	4	3.106	discard	Newton-Schulz iterations 5→4 (hypothesis: fewer NS steps = more throughput = more tokens; evidence: Turbo-Muon research): val_bpb 0.9032→0.9104 WORSE by 0.007 — 5 NS steps needed for proper orthogonalization at this scale
