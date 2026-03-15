@@ -327,10 +327,6 @@ def apply_rotary_emb(x, cos, sin):
     return torch.cat([y1, y2], 3)
 
 
-def _lambda_init_fn(layer_idx):
-    return 0.8 - 0.6 * math.exp(-0.3 * layer_idx)
-
-
 class CausalSelfAttention(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
@@ -338,21 +334,13 @@ class CausalSelfAttention(nn.Module):
         self.n_kv_head = config.n_kv_head
         self.n_embd = config.n_embd
         self.head_dim = self.n_embd // self.n_head
-        self.half_head_dim = self.head_dim // 2
         self.attention_backend = config.attention_backend
         assert self.n_embd % self.n_head == 0
-        assert self.head_dim % 2 == 0, "head_dim must be even for differential attention"
         assert self.n_kv_head <= self.n_head and self.n_head % self.n_kv_head == 0
         self.c_q = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
         self.c_k = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_v = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
-        # Differential attention lambda parameters
-        self.lambda_init = _lambda_init_fn(layer_idx)
-        self.lambda_q1 = nn.Parameter(torch.randn(self.half_head_dim) * 0.1)
-        self.lambda_k1 = nn.Parameter(torch.randn(self.half_head_dim) * 0.1)
-        self.lambda_q2 = nn.Parameter(torch.randn(self.half_head_dim) * 0.1)
-        self.lambda_k2 = nn.Parameter(torch.randn(self.half_head_dim) * 0.1)
         self._mask_cache = {}
 
     def _get_flex_block_mask(self, seq_len, window, device):
@@ -369,11 +357,6 @@ class CausalSelfAttention(nn.Module):
         self._mask_cache[cache_key] = mask
         return mask
 
-    def _compute_lambda(self):
-        lambda_1 = torch.exp(torch.sum(self.lambda_q1 * self.lambda_k1)).float()
-        lambda_2 = torch.exp(torch.sum(self.lambda_q2 * self.lambda_k2)).float()
-        return (lambda_1 - lambda_2 + self.lambda_init).clamp(min=0.0)
-
     def forward(self, x, cos_sin, window_size, ve=None):
         B, T, _ = x.size()
         q = self.c_q(x).view(B, T, self.n_head, self.head_dim)
@@ -386,27 +369,18 @@ class CausalSelfAttention(nn.Module):
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
         q, k = norm(q), norm(k)
 
-        # Split Q, K into two halves for differential attention
-        hd = self.half_head_dim
-        q1, q2 = q[..., :hd], q[..., hd:]  # (B, T, H, hd)
-        k1, k2 = k[..., :hd], k[..., hd:]
-
-        q1, q2 = q1.transpose(1, 2), q2.transpose(1, 2)  # (B, H, T, hd)
-        k1, k2 = k1.transpose(1, 2), k2.transpose(1, 2)
-        v = v.transpose(1, 2).to(q1.dtype)
-
-        gqa = self.n_kv_head < self.n_head
+        q = q.transpose(1, 2)  # (B, H, T, D)
+        k = k.transpose(1, 2)  # (B, KVH, T, D)
+        v = v.transpose(1, 2).to(q.dtype)  # (B, KVH, T, D), match q dtype for flex_attention
         if window_size[0] >= T:
-            y1 = F.scaled_dot_product_attention(q1, k1, v, is_causal=True, enable_gqa=gqa)
-            y2 = F.scaled_dot_product_attention(q2, k2, v, is_causal=True, enable_gqa=gqa)
+            y = F.scaled_dot_product_attention(
+                q, k, v, is_causal=True,
+                enable_gqa=self.n_kv_head < self.n_head,
+            )
         else:
-            block_mask = self._get_flex_block_mask(T, window_size[0], q1.device)
-            y1 = flex_attention(q1, k1, v, block_mask=block_mask, enable_gqa=gqa)
-            y2 = flex_attention(q2, k2, v, block_mask=block_mask, enable_gqa=gqa)
-
-        # Differential attention: y = (attn1 - lambda * attn2) @ V
-        lambda_val = self._compute_lambda()
-        y = (y1 - lambda_val * y2) * (1.0 - self.lambda_init)
+            block_mask = self._get_flex_block_mask(T, window_size[0], q.device)
+            y = flex_attention(q, k, v, block_mask=block_mask,
+                              enable_gqa=self.n_kv_head < self.n_head)
         y = y.transpose(1, 2)
 
         y = y.contiguous().view(B, T, -1)
@@ -476,11 +450,6 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.mlp.c_gate.weight, -s, s)
             torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
-            # Differential attention lambda params
-            torch.nn.init.normal_(block.attn.lambda_q1, mean=0.0, std=0.1)
-            torch.nn.init.normal_(block.attn.lambda_k1, mean=0.0, std=0.1)
-            torch.nn.init.normal_(block.attn.lambda_q2, mean=0.0, std=0.1)
-            torch.nn.init.normal_(block.attn.lambda_k2, mean=0.0, std=0.1)
         self.resid_lambdas.fill_(1.0)
         self.x0_lambdas.fill_(0.1)
         head_dim = self.config.n_embd // self.config.n_head
@@ -555,10 +524,7 @@ class GPT(nn.Module):
     def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02,
                         weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5):
         model_dim = self.config.n_embd
-        all_h_params = list(self.transformer.h.parameters())
-        # Separate 1D lambda params (differential attention) from 2D matrix params
-        matrix_params = [p for p in all_h_params if p.ndim >= 2]
-        diff_attn_lambdas = [p for p in all_h_params if p.ndim == 1]
+        matrix_params = list(self.transformer.h.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         value_emb_params = list(self.value_emb.parameters())
         lm_head_params = list(self.lm_head.parameters())
@@ -566,7 +532,6 @@ class GPT(nn.Module):
         x0_params = [self.x0_lambdas]
         assert len(list(self.parameters())) == (
             len(matrix_params)
-            + len(diff_attn_lambdas)
             + len(embedding_params)
             + len(value_emb_params)
             + len(lm_head_params)
@@ -582,10 +547,6 @@ class GPT(nn.Module):
             dict(kind="adamw", params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
         ]
-        if diff_attn_lambdas:
-            param_groups.append(
-                dict(kind="adamw", params=diff_attn_lambdas, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            )
         muon_group_chunk = 8
         for shape in sorted({p.shape for p in matrix_params}):
             group_params = [p for p in matrix_params if p.shape == shape]
