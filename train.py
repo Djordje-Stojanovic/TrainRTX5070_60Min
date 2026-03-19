@@ -594,6 +594,17 @@ class GPT(nn.Module):
                 ignore_index=-1,
                 reduction=reduction,
             )
+            # Auxiliary loss: predict token+2 using same lm_head (more gradient signal)
+            if T > 2 and reduction == "mean":
+                aux_logits = logits[:, :-1]  # positions 0..T-2
+                aux_targets = targets[:, 1:]  # targets shifted by 1 more (token+2)
+                aux_loss = F.cross_entropy(
+                    aux_logits.reshape(-1, aux_logits.size(-1)),
+                    aux_targets.reshape(-1),
+                    ignore_index=-1,
+                    reduction=reduction,
+                )
+                loss = 0.9 * loss + 0.1 * aux_loss
             return loss
         return logits
 
