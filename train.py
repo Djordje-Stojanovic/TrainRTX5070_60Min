@@ -408,11 +408,14 @@ class Block(nn.Module):
         self.use_mlp_checkpointing = config.use_activation_checkpointing
 
     def forward(self, x, cos_sin, window_size, ve=None):
-        x = x + self.attn(norm(x), cos_sin, window_size, ve=ve)
+        # Parallel attention + MLP (GPT-J/PaLM style): both read same normalized input
+        nx = norm(x)
+        attn_out = self.attn(nx, cos_sin, window_size, ve=ve)
         if self.use_mlp_checkpointing:
-            x = x + torch_checkpoint(self.mlp, norm(x), use_reentrant=False)
+            mlp_out = torch_checkpoint(self.mlp, nx, use_reentrant=False)
         else:
-            x = x + self.mlp(norm(x))
+            mlp_out = self.mlp(nx)
+        x = x + attn_out + mlp_out
         return x
 
 
