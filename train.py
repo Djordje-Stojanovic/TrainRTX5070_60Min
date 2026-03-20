@@ -568,7 +568,7 @@ class GPT(nn.Module):
             group["initial_lr"] = group["lr"]
         return optimizer
 
-    def forward(self, idx, targets=None, reduction="mean", z_loss_coeff=0.0):
+    def forward(self, idx, targets=None, reduction="mean"):
         B, T = idx.size()
         assert T <= self.cos.size(1)
         cos_sin = self.cos[:, :T], self.sin[:, :T]
@@ -584,8 +584,8 @@ class GPT(nn.Module):
         x = norm(x)
 
         softcap = 15
-        raw_logits = self.lm_head(x).float()
-        logits = softcap * torch.tanh(raw_logits / softcap)
+        logits = self.lm_head(x).float()
+        logits = softcap * torch.tanh(logits / softcap)
 
         if targets is not None:
             loss = F.cross_entropy(
@@ -594,9 +594,6 @@ class GPT(nn.Module):
                 ignore_index=-1,
                 reduction=reduction,
             )
-            if z_loss_coeff > 0 and reduction == "mean":
-                z_loss = z_loss_coeff * torch.logsumexp(raw_logits, dim=-1).square().mean()
-                loss = loss + z_loss
             return loss
         return logits
 
@@ -1109,7 +1106,7 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         t0 = time.time()
         for _ in range(grad_accum_steps):
             with autocast_ctx:
-                loss = model(x, y, z_loss_coeff=1e-4)
+                loss = model(x, y)
             train_loss = loss.detach()
             loss = loss / grad_accum_steps
             loss.backward()
