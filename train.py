@@ -408,11 +408,11 @@ class Block(nn.Module):
         self.use_mlp_checkpointing = config.use_activation_checkpointing
 
     def forward(self, x, cos_sin, window_size, ve=None):
-        x = x + self.attn(norm(x), cos_sin, window_size, ve=ve)
+        x = x + norm(self.attn(norm(x), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
-            x = x + torch_checkpoint(self.mlp, norm(x), use_reentrant=False)
+            x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
         else:
-            x = x + self.mlp(norm(x))
+            x = x + norm(self.mlp(norm(x)))
         return x
 
 
