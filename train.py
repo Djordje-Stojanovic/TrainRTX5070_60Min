@@ -425,8 +425,7 @@ class GPT(nn.Module):
             "wte": nn.Embedding(config.vocab_size, config.n_embd),
             "h": nn.ModuleList([Block(config, i) for i in range(config.n_layer)]),
         })
-        self.ve_dim = config.n_kv_head * (config.n_embd // config.n_head)
-        self.value_emb = nn.Embedding(config.vocab_size, self.ve_dim)
+        self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))
         self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))
@@ -790,7 +789,7 @@ def build_model_config(depth, vocab_size, runtime, use_activation_checkpointing=
         vocab_size=vocab_size,
         n_layer=depth,
         n_head=num_heads,
-        n_kv_head=max(1, num_heads // 2),
+        n_kv_head=num_heads,
         n_embd=model_dim,
         window_pattern=WINDOW_PATTERN,
         short_window=SHORT_WINDOW,
