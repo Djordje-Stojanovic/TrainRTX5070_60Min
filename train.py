@@ -408,11 +408,11 @@ class Block(nn.Module):
         self.use_mlp_checkpointing = config.use_activation_checkpointing
 
     def forward(self, x, cos_sin, window_size, ve=None):
-        x = x + self.attn(norm(x), cos_sin, window_size, ve=ve)
+        x = x + norm(self.attn(norm(x), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
-            x = x + torch_checkpoint(self.mlp, norm(x), use_reentrant=False)
+            x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
         else:
-            x = x + self.mlp(norm(x))
+            x = x + norm(self.mlp(norm(x)))
         return x
 
 
@@ -451,7 +451,7 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
         self.resid_lambdas.fill_(1.0)
-        self.x0_lambdas.fill_(0.1)
+        self.x0_lambdas.fill_(0.2)
         head_dim = self.config.n_embd // self.config.n_head
         cos, sin = self._precompute_rotary_embeddings(
             self.rotary_seq_len,
