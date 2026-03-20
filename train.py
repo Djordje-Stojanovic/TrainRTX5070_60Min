@@ -1090,7 +1090,7 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         return (1 - frac) * 0.85 + frac * 0.95
 
     def get_weight_decay(progress):
-        return WEIGHT_DECAY
+        return WEIGHT_DECAY * (1 - progress)
 
     target_training_seconds = 10 if smoke_test else TIME_BUDGET
     max_steps = 3 if smoke_test else None
