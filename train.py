@@ -343,7 +343,6 @@ class CausalSelfAttention(nn.Module):
         self.c_k = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_v = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
-        self.head_gate = nn.Linear(self.n_embd, self.n_head, bias=False)
         self._mask_cache = {}
 
     def _get_flex_block_mask(self, seq_len, window, device):
@@ -384,11 +383,7 @@ class CausalSelfAttention(nn.Module):
             block_mask = self._get_flex_block_mask(T, window_size[0], q.device)
             y = flex_attention(q, k, v, block_mask=block_mask,
                               enable_gqa=self.n_kv_head < self.n_head)
-        y = y.transpose(1, 2)  # (B, T, H, D)
-
-        # Soft head gating (MoH-inspired): per-token, per-head sigmoid gate
-        gate = torch.sigmoid(self.head_gate(x))  # (B, T, n_head)
-        y = y * gate.unsqueeze(-1)  # (B, T, H, D) * (B, T, H, 1)
+        y = y.transpose(1, 2)
 
         y = y.contiguous().view(B, T, -1)
         y = self.c_proj(y)
@@ -459,7 +454,6 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.attn.c_k.weight, -s, s)
             torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
             torch.nn.init.zeros_(block.attn.c_proj.weight)
-            torch.nn.init.zeros_(block.attn.head_gate.weight)
             torch.nn.init.uniform_(block.mlp.c_gate.weight, -s, s)
             torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
