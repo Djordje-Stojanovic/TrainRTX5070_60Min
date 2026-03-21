@@ -320,13 +320,13 @@ def norm(x):
 
 def apply_rotary_emb(x, cos, sin):
     assert x.ndim == 4
-    d = cos.shape[-1]  # half the rotary dimensions
-    out = torch.empty_like(x)
-    x1, x2 = x[..., :d], x[..., d:2*d]
-    out[..., :d] = x1 * cos + x2 * sin
-    out[..., d:2*d] = x1 * (-sin) + x2 * cos
-    out[..., 2*d:] = x[..., 2*d:]
-    return out
+    rotary_dim = cos.shape[-1] * 2  # cos has half the rotary dimensions
+    x_rot, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
+    d = rotary_dim // 2
+    x1, x2 = x_rot[..., :d], x_rot[..., d:]
+    y1 = x1 * cos + x2 * sin
+    y2 = x1 * (-sin) + x2 * cos
+    return torch.cat([y1, y2, x_pass], 3)
 
 
 class CausalSelfAttention(nn.Module):
