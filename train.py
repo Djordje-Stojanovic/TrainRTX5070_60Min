@@ -585,10 +585,19 @@ class GPT(nn.Module):
         x = norm(x)
         x0 = x
         ve = self.value_emb(idx)
+        n_layers = len(self.transformer.h)
+        half = n_layers // 2
+        skip_connections = []
         for i, block in enumerate(self.transformer.h):
             x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
             window_size = self.window_sizes[i]
             x = block(x, cos_sin, window_size, ve=ve)
+            # U-net: save first-half outputs, add to second-half inputs
+            if i < half:
+                skip_connections.append(x)
+            elif i >= half:
+                mirror = n_layers - 1 - i
+                x = x + skip_connections[mirror]
         x = norm(x)
 
         softcap = 15
