@@ -771,7 +771,7 @@ SHORT_WINDOW = 256        # short window size in tokens (modded-nanogpt uses 128
 # Optimization
 TOTAL_BATCH_SIZE = 2 ** 17
 EMBEDDING_LR = 0.4
-UNEMBEDDING_LR = 0.004
+UNEMBEDDING_LR = 0.01
 MATRIX_LR = 0.04
 SCALAR_LR = 0.5
 WEIGHT_DECAY = 0.1
