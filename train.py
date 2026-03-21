@@ -320,11 +320,13 @@ def norm(x):
 
 def apply_rotary_emb(x, cos, sin):
     assert x.ndim == 4
-    d = x.shape[3] // 2
-    x1, x2 = x[..., :d], x[..., d:]
+    rotary_dim = cos.shape[-1] * 2  # cos has half the rotary dimensions
+    x_rot, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
+    d = rotary_dim // 2
+    x1, x2 = x_rot[..., :d], x_rot[..., d:]
     y1 = x1 * cos + x2 * sin
     y2 = x1 * (-sin) + x2 * cos
-    return torch.cat([y1, y2], 3)
+    return torch.cat([y1, y2, x_pass], 3)
 
 
 class CausalSelfAttention(nn.Module):
@@ -469,8 +471,9 @@ class GPT(nn.Module):
     def _precompute_rotary_embeddings(self, seq_len, head_dim, base=10000, device=None, dtype=torch.bfloat16):
         if device is None:
             device = self.transformer.wte.weight.device
-        channel_range = torch.arange(0, head_dim, 2, dtype=torch.float32, device=device)
-        inv_freq = 1.0 / (base ** (channel_range / head_dim))
+        rotary_dim = head_dim // 2  # partial RoPE: only 50% of head dims
+        channel_range = torch.arange(0, rotary_dim, 2, dtype=torch.float32, device=device)
+        inv_freq = 1.0 / (base ** (channel_range / rotary_dim))
         t = torch.arange(seq_len, dtype=torch.float32, device=device)
         freqs = torch.outer(t, inv_freq)
         cos, sin = freqs.cos(), freqs.sin()
