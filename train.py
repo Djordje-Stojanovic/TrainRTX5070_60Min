@@ -393,18 +393,13 @@ class CausalSelfAttention(nn.Module):
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        # Hourglass: K=2 stacked sub-MLPs, same total params as single wide MLP
-        hidden = ((int(config.n_embd * 8 / 3 / 2) + 63) // 64) * 64
-        self.c_gate1 = nn.Linear(config.n_embd, hidden, bias=False)
-        self.c_up1 = nn.Linear(config.n_embd, hidden, bias=False)
-        self.c_proj1 = nn.Linear(hidden, config.n_embd, bias=False)
-        self.c_gate2 = nn.Linear(config.n_embd, hidden, bias=False)
-        self.c_up2 = nn.Linear(config.n_embd, hidden, bias=False)
-        self.c_proj2 = nn.Linear(hidden, config.n_embd, bias=False)
+        hidden = ((int(config.n_embd * 8 / 3) + 63) // 64) * 64
+        self.c_gate = nn.Linear(config.n_embd, hidden, bias=False)
+        self.c_up = nn.Linear(config.n_embd, hidden, bias=False)
+        self.c_proj = nn.Linear(hidden, config.n_embd, bias=False)
 
     def forward(self, x):
-        h = self.c_proj1(F.silu(self.c_gate1(x)) * self.c_up1(x))
-        return self.c_proj2(F.silu(self.c_gate2(h)) * self.c_up2(h))
+        return self.c_proj(F.silu(self.c_gate(x)) * self.c_up(x))
 
 
 class Block(nn.Module):
@@ -459,12 +454,9 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.attn.c_k.weight, -s, s)
             torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
             torch.nn.init.zeros_(block.attn.c_proj.weight)
-            torch.nn.init.uniform_(block.mlp.c_gate1.weight, -s, s)
-            torch.nn.init.uniform_(block.mlp.c_up1.weight, -s, s)
-            torch.nn.init.uniform_(block.mlp.c_proj1.weight, -s, s)
-            torch.nn.init.uniform_(block.mlp.c_gate2.weight, -s, s)
-            torch.nn.init.uniform_(block.mlp.c_up2.weight, -s, s)
-            torch.nn.init.zeros_(block.mlp.c_proj2.weight)
+            torch.nn.init.uniform_(block.mlp.c_gate.weight, -s, s)
+            torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
+            torch.nn.init.zeros_(block.mlp.c_proj.weight)
         self.resid_lambdas.fill_(1.0)
         self.x0_lambdas.fill_(0.2)
         head_dim = self.config.n_embd // self.config.n_head
