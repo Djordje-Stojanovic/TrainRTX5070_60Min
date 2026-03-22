@@ -312,6 +312,7 @@ class GPTConfig:
     attention_backend: str = "sdpa"
     use_activation_checkpointing: bool = False
     compute_dtype: torch.dtype = torch.bfloat16
+    mlp_hidden_dims: tuple[int, ...] | None = None
 
 
 def norm(x):
@@ -391,9 +392,12 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, layer_idx):
         super().__init__()
-        hidden = ((int(config.n_embd * 8 / 3) + 63) // 64) * 64
+        if config.mlp_hidden_dims is not None:
+            hidden = config.mlp_hidden_dims[layer_idx]
+        else:
+            hidden = ((int(config.n_embd * 8 / 3) + 63) // 64) * 64
         self.c_gate = nn.Linear(config.n_embd, hidden, bias=False)
         self.c_up = nn.Linear(config.n_embd, hidden, bias=False)
         self.c_proj = nn.Linear(hidden, config.n_embd, bias=False)
@@ -406,7 +410,7 @@ class Block(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
         self.attn = CausalSelfAttention(config, layer_idx)
-        self.mlp = MLP(config)
+        self.mlp = MLP(config, layer_idx)
         self.use_mlp_checkpointing = config.use_activation_checkpointing
 
     def forward(self, x, cos_sin, window_size, ve=None):
@@ -786,6 +790,14 @@ DEVICE_BATCH_SIZE = 16
 EVAL_BATCH_SIZE = 8
 
 
+def build_mlp_hidden_dims(depth, model_dim):
+    base_hidden = ((int(model_dim * 8 / 3) + 63) // 64) * 64
+    if depth <= 1:
+        return (base_hidden,)
+    centered_span = depth - 1
+    return tuple(base_hidden + 32 * (2 * layer_idx - centered_span) for layer_idx in range(depth))
+
+
 def build_model_config(depth, vocab_size, runtime, use_activation_checkpointing=None):
     if use_activation_checkpointing is None:
         use_activation_checkpointing = runtime.use_activation_checkpointing
@@ -804,6 +816,7 @@ def build_model_config(depth, vocab_size, runtime, use_activation_checkpointing=
         attention_backend=runtime.attention_backend,
         use_activation_checkpointing=use_activation_checkpointing,
         compute_dtype=runtime.amp_dtype,
+        mlp_hidden_dims=build_mlp_hidden_dims(depth, model_dim),
     )
 
 
