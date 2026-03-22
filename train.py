@@ -408,13 +408,14 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = MLP(config)
         self.use_mlp_checkpointing = config.use_activation_checkpointing
-        # Causal depthwise conv for local token mixing (replaces token shift)
-        self.local_conv = nn.Conv1d(config.n_embd, config.n_embd, kernel_size=3, padding=2, groups=config.n_embd, bias=False)
 
     def forward(self, x, cos_sin, window_size, ve=None):
-        # Causal depthwise conv: local token mixing before attention
-        x_conv = self.local_conv(x.transpose(1, 2))[:, :, :x.size(1)].transpose(1, 2)
-        x = x + norm(self.attn(norm(x_conv), cos_sin, window_size, ve=ve))
+        # Token shift: mix last quarter of channels with previous position
+        quarter = x.size(-1) // 4
+        x_prev = torch.roll(x, 1, dims=1)
+        x_prev[:, 0, :] = x[:, 0, :]
+        x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
+        x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
             x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
         else:
@@ -456,9 +457,6 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.mlp.c_gate.weight, -s, s)
             torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
-            # Init causal conv: identity-like (pass-through current token)
-            torch.nn.init.zeros_(block.local_conv.weight)
-            block.local_conv.weight.data[:, :, -1] = 1.0  # last position = current token
         self.resid_lambdas.fill_(1.0)
         self.x0_lambdas.fill_(0.2)
         head_dim = self.config.n_embd // self.config.n_head
@@ -534,9 +532,7 @@ class GPT(nn.Module):
     def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02,
                         weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5):
         model_dim = self.config.n_embd
-        all_h_params = list(self.transformer.h.parameters())
-        matrix_params = [p for p in all_h_params if p.ndim == 2]
-        non_matrix_h_params = [p for p in all_h_params if p.ndim != 2]
+        matrix_params = list(self.transformer.h.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         value_emb_params = list(self.value_emb.parameters())
         lm_head_params = list(self.lm_head.parameters())
@@ -544,7 +540,6 @@ class GPT(nn.Module):
         x0_params = [self.x0_lambdas]
         assert len(list(self.parameters())) == (
             len(matrix_params)
-            + len(non_matrix_h_params)
             + len(embedding_params)
             + len(value_emb_params)
             + len(lm_head_params)
@@ -560,8 +555,6 @@ class GPT(nn.Module):
             dict(kind="adamw", params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
         ]
-        if non_matrix_h_params:
-            param_groups.append(dict(kind="adamw", params=non_matrix_h_params, lr=matrix_lr, betas=adam_betas, eps=1e-10, weight_decay=weight_decay))
         muon_group_chunk = 8
         for shape in sorted({p.shape for p in matrix_params}):
             group_params = [p for p in matrix_params if p.shape == shape]
