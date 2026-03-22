@@ -312,7 +312,6 @@ class GPTConfig:
     attention_backend: str = "sdpa"
     use_activation_checkpointing: bool = False
     compute_dtype: torch.dtype = torch.bfloat16
-    mlp_hidden_dims: tuple[int, ...] | None = None
 
 
 def norm(x):
@@ -362,7 +361,6 @@ class CausalSelfAttention(nn.Module):
 
     def forward(self, x, cos_sin, window_size, ve=None):
         B, T, _ = x.size()
-        x = x.contiguous()
         q = self.c_q(x).view(B, T, self.n_head, self.head_dim)
         k = self.c_k(x).view(B, T, self.n_kv_head, self.head_dim)
         v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
@@ -393,18 +391,14 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, config, layer_idx):
+    def __init__(self, config):
         super().__init__()
-        if config.mlp_hidden_dims is not None:
-            hidden = config.mlp_hidden_dims[layer_idx]
-        else:
-            hidden = ((int(config.n_embd * 8 / 3) + 63) // 64) * 64
+        hidden = ((int(config.n_embd * 8 / 3) + 63) // 64) * 64
         self.c_gate = nn.Linear(config.n_embd, hidden, bias=False)
         self.c_up = nn.Linear(config.n_embd, hidden, bias=False)
         self.c_proj = nn.Linear(hidden, config.n_embd, bias=False)
 
     def forward(self, x):
-        x = x.contiguous()
         return self.c_proj(F.silu(self.c_gate(x)) * self.c_up(x))
 
 
@@ -412,7 +406,7 @@ class Block(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
         self.attn = CausalSelfAttention(config, layer_idx)
-        self.mlp = MLP(config, layer_idx)
+        self.mlp = MLP(config)
         self.use_mlp_checkpointing = config.use_activation_checkpointing
 
     def forward(self, x, cos_sin, window_size, ve=None):
@@ -420,12 +414,12 @@ class Block(nn.Module):
         quarter = x.size(-1) // 4
         x_prev = torch.roll(x, 1, dims=1)
         x_prev[:, 0, :] = x[:, 0, :]
-        x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1).contiguous()
-        x = x + norm(self.attn(norm(x_attn_in).contiguous(), cos_sin, window_size, ve=ve))
+        x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
+        x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
-            x = x + norm(torch_checkpoint(self.mlp, norm(x).contiguous(), use_reentrant=False))
+            x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
         else:
-            x = x + norm(self.mlp(norm(x).contiguous()))
+            x = x + norm(self.mlp(norm(x)))
         return x
 
 
@@ -792,14 +786,6 @@ DEVICE_BATCH_SIZE = 16
 EVAL_BATCH_SIZE = 8
 
 
-def build_mlp_hidden_dims(depth, model_dim):
-    base_hidden = ((int(model_dim * 8 / 3) + 63) // 64) * 64
-    if depth <= 1:
-        return (base_hidden,)
-    centered_span = depth - 1
-    return tuple(base_hidden + 32 * (2 * layer_idx - centered_span) for layer_idx in range(depth))
-
-
 def build_model_config(depth, vocab_size, runtime, use_activation_checkpointing=None):
     if use_activation_checkpointing is None:
         use_activation_checkpointing = runtime.use_activation_checkpointing
@@ -818,7 +804,6 @@ def build_model_config(depth, vocab_size, runtime, use_activation_checkpointing=
         attention_backend=runtime.attention_backend,
         use_activation_checkpointing=use_activation_checkpointing,
         compute_dtype=runtime.amp_dtype,
-        mlp_hidden_dims=build_mlp_hidden_dims(depth, model_dim),
     )
 
 
