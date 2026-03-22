@@ -362,6 +362,7 @@ class CausalSelfAttention(nn.Module):
 
     def forward(self, x, cos_sin, window_size, ve=None):
         B, T, _ = x.size()
+        x = x.contiguous()
         q = self.c_q(x).view(B, T, self.n_head, self.head_dim)
         k = self.c_k(x).view(B, T, self.n_kv_head, self.head_dim)
         v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
@@ -403,6 +404,7 @@ class MLP(nn.Module):
         self.c_proj = nn.Linear(hidden, config.n_embd, bias=False)
 
     def forward(self, x):
+        x = x.contiguous()
         return self.c_proj(F.silu(self.c_gate(x)) * self.c_up(x))
 
 
@@ -418,12 +420,12 @@ class Block(nn.Module):
         quarter = x.size(-1) // 4
         x_prev = torch.roll(x, 1, dims=1)
         x_prev[:, 0, :] = x[:, 0, :]
-        x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
-        x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
+        x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1).contiguous()
+        x = x + norm(self.attn(norm(x_attn_in).contiguous(), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
-            x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
+            x = x + norm(torch_checkpoint(self.mlp, norm(x).contiguous(), use_reentrant=False))
         else:
-            x = x + norm(self.mlp(norm(x)))
+            x = x + norm(self.mlp(norm(x).contiguous()))
         return x
 
 
