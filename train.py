@@ -1070,7 +1070,7 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         except Exception as e2:
             print(f"FP8 not available ({e2}), using bf16")
 
-    model = _maybe_compile(model, dynamic=False)
+    model = _maybe_compile(model, dynamic=False, mode="reduce-overhead")
 
     train_loader = make_dataloader(
         tokenizer,
