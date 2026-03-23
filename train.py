@@ -471,7 +471,7 @@ class GPT(nn.Module):
     def _precompute_rotary_embeddings(self, seq_len, head_dim, base=10000, device=None, dtype=torch.bfloat16):
         if device is None:
             device = self.transformer.wte.weight.device
-        rotary_dim = head_dim // 2  # partial RoPE: only 50% of head dims
+        rotary_dim = head_dim // 4  # partial RoPE: only 25% of head dims (75% content-based)
         channel_range = torch.arange(0, rotary_dim, 2, dtype=torch.float32, device=device)
         inv_freq = 1.0 / (base ** (channel_range / rotary_dim))
         t = torch.arange(seq_len, dtype=torch.float32, device=device)
