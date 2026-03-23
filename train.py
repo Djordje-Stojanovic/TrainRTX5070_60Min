@@ -1120,6 +1120,7 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
             loss.backward()
             x, y, epoch = next(train_loader)
 
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         progress = min(total_training_time / max(target_training_seconds, 1e-6), 1.0)
         lrm = get_lr_multiplier(progress)
         muon_momentum = get_muon_momentum(step)
