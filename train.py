@@ -1108,24 +1108,19 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
     smooth_train_loss = 0.0
     total_training_time = 0.0
     step = 0
-    total_tokens_processed = 0
-    # Batch size schedule: half batch (2x steps) for first 30%, full batch for rest
-    grad_accum_small = max(grad_accum_steps // 2, 1)  # half batch = half accumulation
 
     while True:
         torch.cuda.synchronize()
         t0 = time.time()
-        progress = min(total_training_time / max(target_training_seconds, 1e-6), 1.0)
-        current_accum = grad_accum_small if progress < 0.3 else grad_accum_steps
-        for _ in range(current_accum):
+        for _ in range(grad_accum_steps):
             with autocast_ctx:
                 loss = model(x, y)
             train_loss = loss.detach()
-            loss = loss / current_accum
+            loss = loss / grad_accum_steps
             loss.backward()
             x, y, epoch = next(train_loader)
-        total_tokens_processed += current_accum * tokens_per_fwdbwd
 
+        progress = min(total_training_time / max(target_training_seconds, 1e-6), 1.0)
         lrm = get_lr_multiplier(progress)
         muon_momentum = get_muon_momentum(step)
         muon_weight_decay = get_weight_decay(progress)
@@ -1151,10 +1146,9 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * train_loss_f
         debiased_smooth_loss = smooth_train_loss / (1 - ema_beta ** (step + 1))
         pct_done = 100 * progress
-        current_batch_tokens = current_accum * tokens_per_fwdbwd
-        tok_per_sec = int(current_batch_tokens / dt)
+        tok_per_sec = int(TOTAL_BATCH_SIZE / dt)
         if runtime.gpu_peak_flops:
-            mfu = 100 * num_flops_per_token * current_batch_tokens / dt / runtime.gpu_peak_flops
+            mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / runtime.gpu_peak_flops
             mfu_text = f"{mfu:.1f}%"
         else:
             mfu_text = "n/a"
@@ -1196,7 +1190,6 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         "t_start": t_start,
         "t_start_training": t_start_training,
         "train_peak_vram_mb": train_peak_vram_mb,
-        "total_tokens_processed": total_tokens_processed,
     }
 
 
@@ -1346,7 +1339,7 @@ def main():
     free_bytes, total_bytes = torch.cuda.mem_get_info()
     eval_peak_vram_mb = (total_bytes - free_bytes) / 1024 / 1024
     train_peak_vram_mb = result["train_peak_vram_mb"]
-    total_tokens = result.get("total_tokens_processed", step * TOTAL_BATCH_SIZE)
+    total_tokens = step * TOTAL_BATCH_SIZE
 
     print("---")
     print(f"val_bpb:          {val_bpb:.6f}")
