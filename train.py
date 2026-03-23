@@ -403,12 +403,11 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config, layer_idx, drop_prob=0.0):
+    def __init__(self, config, layer_idx):
         super().__init__()
         self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = MLP(config)
         self.use_mlp_checkpointing = config.use_activation_checkpointing
-        self.drop_prob = drop_prob
 
     def forward(self, x, cos_sin, window_size, ve=None):
         # Token shift: mix last quarter of channels with previous position
@@ -416,17 +415,12 @@ class Block(nn.Module):
         x_prev = torch.roll(x, 1, dims=1)
         x_prev[:, 0, :] = x[:, 0, :]
         x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
-        attn_out = norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
+        x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
-            mlp_out = norm(torch_checkpoint(self.mlp, norm(x + attn_out), use_reentrant=False))
+            x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
         else:
-            mlp_out = norm(self.mlp(norm(x + attn_out)))
-        block_out = attn_out + mlp_out
-        # Stochastic depth: randomly zero block contribution during training
-        if self.training and self.drop_prob > 0.0:
-            keep = (torch.rand(1, device=x.device) >= self.drop_prob).to(x.dtype)
-            block_out = block_out * keep / (1.0 - self.drop_prob)  # scale to preserve expected value
-        return x + block_out
+            x = x + norm(self.mlp(norm(x)))
+        return x
 
 
 class GPT(nn.Module):
@@ -436,7 +430,7 @@ class GPT(nn.Module):
         self.window_sizes = self._compute_window_sizes(config)
         self.transformer = nn.ModuleDict({
             "wte": nn.Embedding(config.vocab_size, config.n_embd),
-            "h": nn.ModuleList([Block(config, i, drop_prob=STOCHASTIC_DEPTH_RATE * i / max(config.n_layer - 1, 1)) for i in range(config.n_layer)]),
+            "h": nn.ModuleList([Block(config, i) for i in range(config.n_layer)]),
         })
         self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -785,7 +779,6 @@ ADAM_BETAS = (0.8, 0.95)
 WARMUP_RATIO = 0.05
 WARMDOWN_RATIO = 0.5
 FINAL_LR_FRAC = 0.1
-STOCHASTIC_DEPTH_RATE = 0.1  # max drop prob at last layer (linear schedule)
 
 # Model size + memory defaults
 DEPTH = 16
