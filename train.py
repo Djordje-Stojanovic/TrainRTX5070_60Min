@@ -309,7 +309,6 @@ class GPTConfig:
     n_embd: int = 768
     window_pattern: str = "SSSL"
     short_window: int = 256
-    n_sink: int = 4  # number of sink tokens always visible in sliding window
     attention_backend: str = "sdpa"
     use_activation_checkpointing: bool = False
     compute_dtype: torch.dtype = torch.bfloat16
@@ -346,22 +345,19 @@ class CausalSelfAttention(nn.Module):
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.ve_gate_channels = 12
         self.ve_gate = nn.Linear(self.ve_gate_channels, self.n_kv_head, bias=False)
-        self.n_sink = config.n_sink
         self._mask_cache = {}
 
-    def _get_flex_block_mask(self, seq_len, window, n_sink, device):
-        cache_key = (seq_len, int(window), int(n_sink), device.type, device.index)
+    def _get_flex_block_mask(self, seq_len, window, device):
+        cache_key = (seq_len, int(window), device.type, device.index)
         mask = self._mask_cache.get(cache_key)
         if mask is not None:
             return mask
         WINDOW = window
-        N_SINK = n_sink
-        def sliding_causal_sink(b, h, q_idx, kv_idx):
+        def sliding_causal(b, h, q_idx, kv_idx):
             causal = q_idx >= kv_idx
             windowed = q_idx - kv_idx <= WINDOW
-            sink = kv_idx < N_SINK
-            return causal & (windowed | sink)
-        mask = create_block_mask(sliding_causal_sink, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len, device=device)
+            return causal & windowed
+        mask = create_block_mask(sliding_causal, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len, device=device)
         self._mask_cache[cache_key] = mask
         return mask
 
@@ -388,7 +384,7 @@ class CausalSelfAttention(nn.Module):
                 enable_gqa=self.n_kv_head < self.n_head,
             )
         else:
-            block_mask = self._get_flex_block_mask(T, window_size[0], self.n_sink, q.device)
+            block_mask = self._get_flex_block_mask(T, window_size[0], q.device)
             y = flex_attention(q, k, v, block_mask=block_mask,
                               enable_gqa=self.n_kv_head < self.n_head)
         y = y.transpose(1, 2)
@@ -776,7 +772,6 @@ ASPECT_RATIO = 48         # model_dim = depth * ASPECT_RATIO
 HEAD_DIM = 128            # target head dimension for attention
 WINDOW_PATTERN = "SSSL"   # sliding window on early layers, full on every 4th
 SHORT_WINDOW = 256        # short window size in tokens (modded-nanogpt uses 128-384)
-N_SINK = 4                # sink tokens always visible in sliding window (Streaming LLM)
 
 # Optimization
 TOTAL_BATCH_SIZE = 2 ** 17
@@ -811,7 +806,6 @@ def build_model_config(depth, vocab_size, runtime, use_activation_checkpointing=
         n_embd=model_dim,
         window_pattern=WINDOW_PATTERN,
         short_window=SHORT_WINDOW,
-        n_sink=N_SINK,
         attention_backend=runtime.attention_backend,
         use_activation_checkpointing=use_activation_checkpointing,
         compute_dtype=runtime.amp_dtype,
