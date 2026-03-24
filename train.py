@@ -433,7 +433,6 @@ class GPT(nn.Module):
             "h": nn.ModuleList([Block(config, i) for i in range(config.n_layer)]),
         })
         self.value_emb = nn.Embedding(config.vocab_size, config.n_embd)
-        self.pos_emb = nn.Embedding(config.sequence_len, config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))
         self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))
@@ -447,7 +446,6 @@ class GPT(nn.Module):
     def init_weights(self, embed_dtype=torch.bfloat16):
         torch.nn.init.normal_(self.transformer.wte.weight, mean=0.0, std=1.0)
         torch.nn.init.normal_(self.value_emb.weight, mean=0.0, std=0.02)
-        torch.nn.init.normal_(self.pos_emb.weight, mean=0.0, std=0.02)
         torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
         n_embd = self.config.n_embd
         s = 3 ** 0.5 * n_embd ** -0.5
@@ -502,7 +500,6 @@ class GPT(nn.Module):
         nparams_exclude = (
             self.transformer.wte.weight.numel()
             + self.value_emb.weight.numel()
-            + self.pos_emb.weight.numel()
             + self.resid_lambdas.numel()
             + self.x0_lambdas.numel()
         )
@@ -519,15 +516,13 @@ class GPT(nn.Module):
     def num_scaling_params(self):
         wte = sum(p.numel() for p in self.transformer.wte.parameters())
         value_emb = sum(p.numel() for p in self.value_emb.parameters())
-        pos_emb = sum(p.numel() for p in self.pos_emb.parameters())
         lm_head = sum(p.numel() for p in self.lm_head.parameters())
         transformer_matrices = sum(p.numel() for p in self.transformer.h.parameters())
         scalars = self.resid_lambdas.numel() + self.x0_lambdas.numel()
-        total = wte + value_emb + pos_emb + lm_head + transformer_matrices + scalars
+        total = wte + value_emb + lm_head + transformer_matrices + scalars
         return {
             "wte": wte,
             "value_emb": value_emb,
-            "pos_emb": pos_emb,
             "lm_head": lm_head,
             "transformer_matrices": transformer_matrices,
             "scalars": scalars,
@@ -540,7 +535,6 @@ class GPT(nn.Module):
         matrix_params = list(self.transformer.h.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         value_emb_params = list(self.value_emb.parameters())
-        pos_emb_params = list(self.pos_emb.parameters())
         lm_head_params = list(self.lm_head.parameters())
         resid_params = [self.resid_lambdas]
         x0_params = [self.x0_lambdas]
@@ -548,7 +542,6 @@ class GPT(nn.Module):
             len(matrix_params)
             + len(embedding_params)
             + len(value_emb_params)
-            + len(pos_emb_params)
             + len(lm_head_params)
             + len(resid_params)
             + len(x0_params)
@@ -559,7 +552,6 @@ class GPT(nn.Module):
             dict(kind="adamw", params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=embedding_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=value_emb_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind="adamw", params=pos_emb_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
         ]
@@ -589,7 +581,7 @@ class GPT(nn.Module):
         assert T <= self.cos.size(1)
         cos_sin = self.cos[:, :T], self.sin[:, :T]
 
-        x = self.transformer.wte(idx) + self.pos_emb(torch.arange(T, device=idx.device))
+        x = self.transformer.wte(idx)
         x = norm(x)
         x0 = x
         ve = self.value_emb(idx)
