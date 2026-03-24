@@ -343,6 +343,8 @@ class CausalSelfAttention(nn.Module):
         self.c_k = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_v = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
+        self.ve_gate_channels = 12
+        self.ve_gate = nn.Linear(self.ve_gate_channels, self.n_kv_head, bias=False)
         self._mask_cache = {}
 
     def _get_flex_block_mask(self, seq_len, window, device):
@@ -365,7 +367,9 @@ class CausalSelfAttention(nn.Module):
         k = self.c_k(x).view(B, T, self.n_kv_head, self.head_dim)
         v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
         if ve is not None:
-            v = v + ve.view(B, T, self.n_kv_head, self.head_dim)
+            ve = ve.view(B, T, self.n_kv_head, self.head_dim)
+            gate = 3 * torch.sigmoid(self.ve_gate(x[..., :self.ve_gate_channels]))  # (B, T, n_kv_head)
+            v = v + gate.unsqueeze(-1) * ve
 
         cos, sin = cos_sin
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
@@ -454,6 +458,7 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.attn.c_k.weight, -s, s)
             torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
             torch.nn.init.zeros_(block.attn.c_proj.weight)
+            torch.nn.init.zeros_(block.attn.ve_gate.weight)  # sigmoid(0)=0.5, gate=1.5
             torch.nn.init.uniform_(block.mlp.c_gate.weight, -s, s)
             torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
