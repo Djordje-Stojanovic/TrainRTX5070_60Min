@@ -336,8 +336,10 @@ class CausalSelfAttention(nn.Module):
         self.n_kv_head = config.n_kv_head
         self.n_embd = config.n_embd
         self.head_dim = self.n_embd // self.n_head
+        self.sub_head_dim = self.head_dim // 2  # differential attention splits Q,K
         self.attention_backend = config.attention_backend
         assert self.n_embd % self.n_head == 0
+        assert self.head_dim % 2 == 0
         assert self.n_kv_head <= self.n_head and self.n_head % self.n_kv_head == 0
         self.c_q = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
         self.c_k = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
@@ -345,6 +347,13 @@ class CausalSelfAttention(nn.Module):
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.ve_gate_channels = 12
         self.ve_gate = nn.Linear(self.ve_gate_channels, self.n_kv_head, bias=False)
+        # Differential attention lambda parameterization (per-head learnable)
+        self.lambda_q1 = nn.Parameter(torch.zeros(self.n_head, self.sub_head_dim))
+        self.lambda_k1 = nn.Parameter(torch.zeros(self.n_head, self.sub_head_dim))
+        self.lambda_q2 = nn.Parameter(torch.zeros(self.n_head, self.sub_head_dim))
+        self.lambda_k2 = nn.Parameter(torch.zeros(self.n_head, self.sub_head_dim))
+        # Layer-dependent init: λ_init = 0.8 - 0.6 * exp(-0.3 * layer_idx)
+        self.lambda_init = 0.8 - 0.6 * math.exp(-0.3 * layer_idx)
         self._mask_cache = {}
 
     def _get_flex_block_mask(self, seq_len, window, device):
@@ -361,6 +370,25 @@ class CausalSelfAttention(nn.Module):
         self._mask_cache[cache_key] = mask
         return mask
 
+    def _compute_lambda(self):
+        # λ = exp(λq1·λk1) - exp(λq2·λk2) + λ_init  (per-head scalar)
+        lam = (torch.sum(self.lambda_q1 * self.lambda_k1, dim=-1).exp()
+               - torch.sum(self.lambda_q2 * self.lambda_k2, dim=-1).exp()
+               + self.lambda_init)
+        return lam  # (n_head,)
+
+    def _sdpa_call(self, q, k, v, window_size, T):
+        """Run SDPA or flex_attention depending on window size."""
+        if window_size[0] >= T:
+            return F.scaled_dot_product_attention(
+                q, k, v, is_causal=True,
+                enable_gqa=self.n_kv_head < self.n_head,
+            )
+        else:
+            block_mask = self._get_flex_block_mask(T, window_size[0], q.device)
+            return flex_attention(q, k, v, block_mask=block_mask,
+                                 enable_gqa=self.n_kv_head < self.n_head)
+
     def forward(self, x, cos_sin, window_size, ve=None):
         B, T, _ = x.size()
         q = self.c_q(x).view(B, T, self.n_head, self.head_dim)
@@ -371,24 +399,31 @@ class CausalSelfAttention(nn.Module):
             gate = 3 * torch.sigmoid(self.ve_gate(x[..., :self.ve_gate_channels]))  # (B, T, n_kv_head)
             v = v + gate.unsqueeze(-1) * ve
 
+        # Split Q, K into two halves for differential attention
+        q1, q2 = q[..., :self.sub_head_dim], q[..., self.sub_head_dim:]
+        k1, k2 = k[..., :self.sub_head_dim], k[..., self.sub_head_dim:]
+
         cos, sin = cos_sin
-        q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
-        q, k = norm(q), norm(k)
+        q1, k1 = apply_rotary_emb(q1, cos, sin), apply_rotary_emb(k1, cos, sin)
+        q2, k2 = apply_rotary_emb(q2, cos, sin), apply_rotary_emb(k2, cos, sin)
+        q1, k1 = norm(q1), norm(k1)
+        q2, k2 = norm(q2), norm(k2)
 
-        q = q.transpose(1, 2)  # (B, H, T, D)
-        k = k.transpose(1, 2)  # (B, KVH, T, D)
-        v = v.transpose(1, 2).to(q.dtype)  # (B, KVH, T, D), match q dtype for flex_attention
-        if window_size[0] >= T:
-            y = F.scaled_dot_product_attention(
-                q, k, v, is_causal=True,
-                enable_gqa=self.n_kv_head < self.n_head,
-            )
-        else:
-            block_mask = self._get_flex_block_mask(T, window_size[0], q.device)
-            y = flex_attention(q, k, v, block_mask=block_mask,
-                              enable_gqa=self.n_kv_head < self.n_head)
+        q1 = q1.transpose(1, 2)  # (B, H, T, sub_D)
+        k1 = k1.transpose(1, 2)
+        q2 = q2.transpose(1, 2)
+        k2 = k2.transpose(1, 2)
+        v = v.transpose(1, 2).to(q1.dtype)  # (B, KVH, T, D)
+
+        # Differential attention: y = (1-λ_init) * (attn1(V) - λ * attn2(V))
+        y1 = self._sdpa_call(q1, k1, v, window_size, T)
+        y2 = self._sdpa_call(q2, k2, v, window_size, T)
+
+        lam = self._compute_lambda()  # (n_head,)
+        lam = lam[None, :, None, None]  # broadcast: (1, H, 1, 1)
+        y = (1.0 - self.lambda_init) * (y1 - lam * y2)
+
         y = y.transpose(1, 2)
-
         y = y.contiguous().view(B, T, -1)
         y = self.c_proj(y)
         return y
@@ -441,8 +476,9 @@ class GPT(nn.Module):
         self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))
         self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))
         head_dim = config.n_embd // config.n_head
+        sub_head_dim = head_dim // 2  # differential attention sub-head size
         self.rotary_seq_len = config.sequence_len
-        cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim, dtype=config.compute_dtype)
+        cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, sub_head_dim, dtype=config.compute_dtype)
         self.register_buffer("cos", cos, persistent=False)
         self.register_buffer("sin", sin, persistent=False)
 
@@ -459,15 +495,20 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
             torch.nn.init.zeros_(block.attn.c_proj.weight)
             torch.nn.init.zeros_(block.attn.ve_gate.weight)  # sigmoid(0)=0.5, gate=1.5
+            # Diff attention lambdas: init to 0 so λ = exp(0)-exp(0)+λ_init = λ_init
+            torch.nn.init.zeros_(block.attn.lambda_q1)
+            torch.nn.init.zeros_(block.attn.lambda_k1)
+            torch.nn.init.zeros_(block.attn.lambda_q2)
+            torch.nn.init.zeros_(block.attn.lambda_k2)
             torch.nn.init.uniform_(block.mlp.c_gate.weight, -s, s)
             torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
         self.resid_lambdas.fill_(1.0)
         self.x0_lambdas.fill_(0.2)
-        head_dim = self.config.n_embd // self.config.n_head
+        sub_head_dim = (self.config.n_embd // self.config.n_head) // 2
         cos, sin = self._precompute_rotary_embeddings(
             self.rotary_seq_len,
-            head_dim,
+            sub_head_dim,
             dtype=self.config.compute_dtype,
         )
         self.cos, self.sin = cos, sin
