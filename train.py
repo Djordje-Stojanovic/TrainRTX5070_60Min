@@ -462,7 +462,7 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.mlp.c_gate.weight, -s, s)
             torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
-        self.resid_lambdas.fill_(1.0)
+        self.resid_lambdas.fill_(1.1 ** 0.5)  # ~1.049, modded-nanogpt: cumulative 1.1× per block
         self.x0_lambdas.fill_(0.2)
         head_dim = self.config.n_embd // self.config.n_head
         cos, sin = self._precompute_rotary_embeddings(
