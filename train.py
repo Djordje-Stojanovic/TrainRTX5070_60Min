@@ -1038,7 +1038,9 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
     print(f"Estimated FLOPs per token: {num_flops_per_token:e}")
 
     tokens_per_fwdbwd = device_batch_size * MAX_SEQ_LEN
-    grad_accum_steps = TOTAL_BATCH_SIZE // tokens_per_fwdbwd
+    grad_accum_steps_full = TOTAL_BATCH_SIZE // tokens_per_fwdbwd
+    grad_accum_steps_small = max(1, grad_accum_steps_full // 2)
+    grad_accum_steps = grad_accum_steps_full  # initial value for display
     optimizer = model.setup_optimizer(
         unembedding_lr=UNEMBEDDING_LR,
         embedding_lr=EMBEDDING_LR,
@@ -1112,16 +1114,22 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
     torch.cuda.reset_peak_memory_stats()  # clean baseline for training VRAM measurement
     smooth_train_loss = 0.0
     total_training_time = 0.0
+    total_tokens_processed = 0
     step = 0
 
+    BATCH_SCHEDULE_SWITCH = 0.3  # switch from small to full batch at 30% training
     while True:
         torch.cuda.synchronize()
         t0 = time.time()
-        for _ in range(grad_accum_steps):
+        # Dynamic batch size: small batch for first 30%, then full batch
+        progress_est = min(total_training_time / max(target_training_seconds, 1e-6), 1.0)
+        current_accum = grad_accum_steps_small if progress_est < BATCH_SCHEDULE_SWITCH else grad_accum_steps_full
+        effective_batch = current_accum * tokens_per_fwdbwd
+        for _ in range(current_accum):
             with autocast_ctx:
                 loss = model(x, y)
             train_loss = loss.detach()
-            loss = loss / grad_accum_steps
+            loss = loss / current_accum
             loss.backward()
             x, y, epoch = next(train_loader)
 
@@ -1146,14 +1154,15 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         dt = t1 - t0
         if step > 10:
             total_training_time += dt
+        total_tokens_processed += effective_batch
 
         ema_beta = 0.9
         smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * train_loss_f
         debiased_smooth_loss = smooth_train_loss / (1 - ema_beta ** (step + 1))
         pct_done = 100 * progress
-        tok_per_sec = int(TOTAL_BATCH_SIZE / dt)
+        tok_per_sec = int(effective_batch / dt)
         if runtime.gpu_peak_flops:
-            mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / runtime.gpu_peak_flops
+            mfu = 100 * num_flops_per_token * effective_batch / dt / runtime.gpu_peak_flops
             mfu_text = f"{mfu:.1f}%"
         else:
             mfu_text = "n/a"
@@ -1191,6 +1200,7 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         "num_params": num_params,
         "num_flops_per_token": num_flops_per_token,
         "total_training_time": total_training_time,
+        "total_tokens_processed": total_tokens_processed,
         "step": step,
         "t_start": t_start,
         "t_start_training": t_start_training,
@@ -1344,7 +1354,7 @@ def main():
     free_bytes, total_bytes = torch.cuda.mem_get_info()
     eval_peak_vram_mb = (total_bytes - free_bytes) / 1024 / 1024
     train_peak_vram_mb = result["train_peak_vram_mb"]
-    total_tokens = step * TOTAL_BATCH_SIZE
+    total_tokens = result.get("total_tokens_processed", step * TOTAL_BATCH_SIZE)
 
     print("---")
     print(f"val_bpb:          {val_bpb:.6f}")
