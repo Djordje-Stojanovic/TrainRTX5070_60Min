@@ -420,14 +420,10 @@ class Block(nn.Module):
         x_prev[:, 0, :] = x[:, 0, :]
         x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
         x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
-        # Token shift for MLP: previous position's post-attention features
-        x_prev_mlp = torch.roll(x, 1, dims=1)
-        x_prev_mlp[:, 0, :] = x[:, 0, :]
-        x_mlp_in = torch.cat([x[:, :, :3*quarter], x_prev_mlp[:, :, 3*quarter:]], dim=-1)
         if self.use_mlp_checkpointing:
-            x = x + norm(torch_checkpoint(self.mlp, norm(x_mlp_in), use_reentrant=False))
+            x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
         else:
-            x = x + norm(self.mlp(norm(x_mlp_in)))
+            x = x + norm(self.mlp(norm(x)))
         return x
 
 
