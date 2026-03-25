@@ -477,24 +477,13 @@ class GPT(nn.Module):
         if device is None:
             device = self.transformer.wte.weight.device
         rotary_dim = head_dim // 2  # partial RoPE: only 50% of head dims
-        n_head = self.config.n_head
-        # Multi-resolution RoPE: each head gets a different base frequency
-        # Log-spaced from 2000 to 150000 for diverse distance scales
-        import math
-        bases = [2000 * (75 ** (i / (n_head - 1))) for i in range(n_head)]
         channel_range = torch.arange(0, rotary_dim, 2, dtype=torch.float32, device=device)
+        inv_freq = 1.0 / (base ** (channel_range / rotary_dim))
         t = torch.arange(seq_len, dtype=torch.float32, device=device)
-        cos_list, sin_list = [], []
-        for b in bases:
-            inv_freq = 1.0 / (b ** (channel_range / rotary_dim))
-            freqs = torch.outer(t, inv_freq)
-            cos_list.append(freqs.cos())
-            sin_list.append(freqs.sin())
-        # Each entry is (T, rotary_dim//2), stack to (n_head, T, rotary_dim//2)
-        # then permute to (T, n_head, rotary_dim//2) and add batch dim
-        cos = torch.stack(cos_list, dim=0).permute(1, 0, 2).unsqueeze(0)  # (1, T, n_head, D)
-        sin = torch.stack(sin_list, dim=0).permute(1, 0, 2).unsqueeze(0)
+        freqs = torch.outer(t, inv_freq)
+        cos, sin = freqs.cos(), freqs.sin()
         cos, sin = cos.to(dtype=dtype), sin.to(dtype=dtype)
+        cos, sin = cos[None, :, None, :], sin[None, :, None, :]
         return cos, sin
 
     def _compute_window_sizes(self, config):
