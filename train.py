@@ -1094,8 +1094,9 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
             return progress / WARMUP_RATIO if WARMUP_RATIO > 0 else 1.0
         if progress < 1.0 - WARMDOWN_RATIO:
             return 1.0
-        cooldown = (1.0 - progress) / WARMDOWN_RATIO  # 1.0→0.0 during warmdown
-        return cooldown * 1.0 + (1 - cooldown) * FINAL_LR_FRAC  # linear decay
+        cooldown = (1.0 - progress) / WARMDOWN_RATIO
+        cosine_decay = 0.5 * (1 + math.cos(math.pi * (1 - cooldown)))
+        return cosine_decay * 1.0 + (1 - cosine_decay) * FINAL_LR_FRAC
 
     def get_muon_momentum(step):
         frac = min(step / 300, 1)
