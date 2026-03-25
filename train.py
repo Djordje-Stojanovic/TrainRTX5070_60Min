@@ -1113,6 +1113,9 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
     smooth_train_loss = 0.0
     total_training_time = 0.0
     step = 0
+    # Late-start EMA: only collect during warmdown phase
+    ema_decay = 0.999
+    ema_params = None
 
     while True:
         torch.cuda.synchronize()
@@ -1136,6 +1139,14 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
                 group["weight_decay"] = muon_weight_decay
         optimizer.step()
         model.zero_grad(set_to_none=True)
+        # Late-start EMA: only average during warmdown phase
+        if progress >= (1.0 - WARMDOWN_RATIO):
+            with torch.no_grad():
+                if ema_params is None:
+                    ema_params = {name: p.data.clone() for name, p in model.named_parameters()}
+                else:
+                    for name, p in model.named_parameters():
+                        ema_params[name].lerp_(p.data, 1 - ema_decay)
 
         train_loss_f = train_loss.item()
         if train_loss_f > 100:
@@ -1186,6 +1197,12 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
     # which only tracks tensor allocations and misses caching allocator + triton workspace
     free_bytes, total_bytes = torch.cuda.mem_get_info()
     train_peak_vram_mb = (total_bytes - free_bytes) / 1024 / 1024
+    # Swap in EMA weights for evaluation (if collected)
+    if ema_params is not None:
+        with torch.no_grad():
+            for name, p in model.named_parameters():
+                p.data.copy_(ema_params[name])
+        del ema_params
     return {
         "model": model,
         "num_params": num_params,
