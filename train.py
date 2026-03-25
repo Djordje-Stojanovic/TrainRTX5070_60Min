@@ -345,6 +345,9 @@ class CausalSelfAttention(nn.Module):
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.ve_gate_channels = 12
         self.ve_gate = nn.Linear(self.ve_gate_channels, self.n_kv_head, bias=False)
+        # Learnable attention temperature (modded-nanogpt attn_scale_start=0.1)
+        # Starts small → diffuse attention early, model learns to sharpen
+        self.attn_scale = nn.Parameter(torch.full((self.n_head,), 0.2))
         self._mask_cache = {}
 
     def _get_flex_block_mask(self, seq_len, window, device):
@@ -374,6 +377,8 @@ class CausalSelfAttention(nn.Module):
         cos, sin = cos_sin
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
         q, k = norm(q), norm(k)
+        # Apply learnable attention temperature (scales QK logits)
+        q = q * self.attn_scale.to(q.dtype).view(1, 1, self.n_head, 1)
 
         q = q.transpose(1, 2)  # (B, H, T, D)
         k = k.transpose(1, 2)  # (B, KVH, T, D)
@@ -459,6 +464,7 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
             torch.nn.init.zeros_(block.attn.c_proj.weight)
             torch.nn.init.zeros_(block.attn.ve_gate.weight)  # sigmoid(0)=0.5, gate=1.5
+            block.attn.attn_scale.fill_(0.2)  # diffuse attention at start
             torch.nn.init.uniform_(block.mlp.c_gate.weight, -s, s)
             torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
@@ -537,7 +543,10 @@ class GPT(nn.Module):
     def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02,
                         weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5):
         model_dim = self.config.n_embd
-        matrix_params = list(self.transformer.h.parameters())
+        # Separate attn_scale (1D) from matrix params (2D) — attn_scale uses AdamW, not Muon
+        attn_scale_params = [block.attn.attn_scale for block in self.transformer.h]
+        attn_scale_set = set(id(p) for p in attn_scale_params)
+        matrix_params = [p for p in self.transformer.h.parameters() if id(p) not in attn_scale_set]
         embedding_params = list(self.transformer.wte.parameters())
         value_emb_params = list(self.value_emb.parameters())
         lm_head_params = list(self.lm_head.parameters())
@@ -545,6 +554,7 @@ class GPT(nn.Module):
         x0_params = [self.x0_lambdas]
         assert len(list(self.parameters())) == (
             len(matrix_params)
+            + len(attn_scale_params)
             + len(embedding_params)
             + len(value_emb_params)
             + len(lm_head_params)
@@ -559,6 +569,7 @@ class GPT(nn.Module):
             dict(kind="adamw", params=value_emb_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
+            dict(kind="adamw", params=attn_scale_params, lr=scalar_lr, betas=(0.9, 0.95), eps=1e-10, weight_decay=0.0),
         ]
         muon_group_chunk = 8
         for shape in sorted({p.shape for p in matrix_params}):
