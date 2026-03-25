@@ -1113,9 +1113,6 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
     smooth_train_loss = 0.0
     total_training_time = 0.0
     step = 0
-    # EMA of model weights for better eval generalization
-    ema_decay = 0.999
-    ema_params = {name: p.data.clone() for name, p in model.named_parameters()}
 
     while True:
         torch.cuda.synchronize()
@@ -1139,10 +1136,6 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
                 group["weight_decay"] = muon_weight_decay
         optimizer.step()
         model.zero_grad(set_to_none=True)
-        # Update EMA weights
-        with torch.no_grad():
-            for name, p in model.named_parameters():
-                ema_params[name].lerp_(p.data, 1 - ema_decay)
 
         train_loss_f = train_loss.item()
         if train_loss_f > 100:
@@ -1193,11 +1186,6 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
     # which only tracks tensor allocations and misses caching allocator + triton workspace
     free_bytes, total_bytes = torch.cuda.mem_get_info()
     train_peak_vram_mb = (total_bytes - free_bytes) / 1024 / 1024
-    # Swap in EMA weights for evaluation
-    with torch.no_grad():
-        for name, p in model.named_parameters():
-            p.data.copy_(ema_params[name])
-    del ema_params  # free memory before eval
     return {
         "model": model,
         "num_params": num_params,
