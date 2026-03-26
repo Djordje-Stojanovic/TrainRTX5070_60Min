@@ -581,7 +581,7 @@ class GPT(nn.Module):
             group["initial_lr"] = group["lr"]
         return optimizer
 
-    def forward(self, idx, targets=None, reduction="mean", label_smoothing=0.0):
+    def forward(self, idx, targets=None, reduction="mean"):
         B, T = idx.size()
         assert T <= self.cos.size(1)
         cos_sin = self.cos[:, :T], self.sin[:, :T]
@@ -606,7 +606,6 @@ class GPT(nn.Module):
                 targets.view(-1),
                 ignore_index=-1,
                 reduction=reduction,
-                label_smoothing=label_smoothing,
             )
             return loss
         return logits
@@ -785,7 +784,6 @@ ADAM_BETAS = (0.8, 0.95)
 WARMUP_RATIO = 0.05
 WARMDOWN_RATIO = 0.7
 FINAL_LR_FRAC = 0.1
-LABEL_SMOOTHING = 0.1
 
 # Model size + memory defaults
 DEPTH = 16
@@ -1121,7 +1119,7 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         t0 = time.time()
         for _ in range(grad_accum_steps):
             with autocast_ctx:
-                loss = model(x, y, label_smoothing=LABEL_SMOOTHING)
+                loss = model(x, y)
             train_loss = loss.detach()
             loss = loss / grad_accum_steps
             loss.backward()
