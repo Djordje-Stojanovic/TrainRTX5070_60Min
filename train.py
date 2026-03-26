@@ -623,10 +623,10 @@ class GPT(nn.Module):
                 mtp_hidden = self.mtp_proj(norm(x[:, :-1]))  # B, T-1, D
                 mtp_logits = self.lm_head(mtp_hidden).float()
                 mtp_logits = softcap * torch.tanh(mtp_logits / softcap)
-                mtp_targets = targets[:, 1:]  # shift targets by 1 more = t+2
+                mtp_targets = targets[:, 1:].contiguous()  # shift targets by 1 more = t+2
                 mtp_loss = F.cross_entropy(
-                    mtp_logits.view(-1, mtp_logits.size(-1)),
-                    mtp_targets.view(-1),
+                    mtp_logits.reshape(-1, mtp_logits.size(-1)),
+                    mtp_targets.reshape(-1),
                     ignore_index=-1,
                     reduction=reduction,
                 )
