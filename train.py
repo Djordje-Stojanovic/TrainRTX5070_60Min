@@ -1114,12 +1114,6 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
     total_training_time = 0.0
     step = 0
 
-    # LAWA: save last K checkpoints during late warmdown for weight averaging
-    LAWA_K = 5  # number of checkpoints to average
-    LAWA_START = 0.85  # start saving at 85% progress (deep into warmdown)
-    lawa_checkpoints = []
-    lawa_interval = None  # computed on first save
-
     while True:
         torch.cuda.synchronize()
         t0 = time.time()
@@ -1179,16 +1173,6 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         elif (step + 1) % 5000 == 0:
             gc.collect()
 
-        # LAWA: save checkpoints during late warmdown
-        if progress >= LAWA_START:
-            if lawa_interval is None:
-                # Compute interval to get K evenly-spaced checkpoints in remaining training
-                remaining_steps = max(1, int((1.0 - progress) * step / max(progress, 1e-6)))
-                lawa_interval = max(1, remaining_steps // LAWA_K)
-            if len(lawa_checkpoints) < LAWA_K and (step % lawa_interval == 0 or len(lawa_checkpoints) == 0):
-                raw = model._orig_mod if hasattr(model, "_orig_mod") else model
-                lawa_checkpoints.append({k: v.clone().cpu() for k, v in raw.state_dict().items()})
-
         step += 1
         if max_steps is not None and step >= max_steps:
             break
@@ -1198,21 +1182,6 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
             break
 
     print()
-
-    # LAWA: also save the final checkpoint
-    if len(lawa_checkpoints) > 0:
-        raw = model._orig_mod if hasattr(model, "_orig_mod") else model
-        lawa_checkpoints.append({k: v.clone().cpu() for k, v in raw.state_dict().items()})
-        # Average the last K+1 checkpoints (K saved during training + final)
-        avg_state = {}
-        n = len(lawa_checkpoints)
-        for key in lawa_checkpoints[0]:
-            avg_state[key] = sum(ckpt[key].float() for ckpt in lawa_checkpoints) / n
-            avg_state[key] = avg_state[key].to(lawa_checkpoints[0][key].dtype)
-        raw.load_state_dict(avg_state)
-        print(f"LAWA: averaged {n} checkpoints from last {100*(1-LAWA_START):.0f}% of training")
-        del lawa_checkpoints, avg_state  # free memory
-
     # Use mem_get_info for real VRAM (matches nvidia-smi), not max_memory_allocated
     # which only tracks tensor allocations and misses caching allocator + triton workspace
     free_bytes, total_bytes = torch.cuda.mem_get_info()
