@@ -397,13 +397,12 @@ class CausalSelfAttention(nn.Module):
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        hidden = ((int(config.n_embd * 8 / 3) + 63) // 64) * 64
-        self.c_gate = nn.Linear(config.n_embd, hidden, bias=False)
-        self.c_up = nn.Linear(config.n_embd, hidden, bias=False)
+        hidden = 4 * config.n_embd  # 4x expansion, non-gated (same params as SwiGLU 8/3x)
+        self.c_fc = nn.Linear(config.n_embd, hidden, bias=False)
         self.c_proj = nn.Linear(hidden, config.n_embd, bias=False)
 
     def forward(self, x):
-        return self.c_proj(F.silu(self.c_gate(x)) * self.c_up(x))
+        return self.c_proj(F.silu(self.c_fc(x)))
 
 
 class Block(nn.Module):
@@ -459,8 +458,7 @@ class GPT(nn.Module):
             torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
             torch.nn.init.zeros_(block.attn.c_proj.weight)
             torch.nn.init.zeros_(block.attn.ve_gate.weight)  # sigmoid(0)=0.5, gate=1.5
-            torch.nn.init.uniform_(block.mlp.c_gate.weight, -s, s)
-            torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
+            torch.nn.init.uniform_(block.mlp.c_fc.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
         self.resid_lambdas.fill_(1.0)
         self.x0_lambdas.fill_(0.2)
