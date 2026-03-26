@@ -619,11 +619,13 @@ class GPT(nn.Module):
                 reduction=reduction,
             )
             # MTP: predict t+2 using shared lm_head (Nemotron 3 Super inspired)
+            # Compute on full T to keep MXFP8 alignment (dims must be multiple of 32)
             if T > 2:
-                mtp_hidden = self.mtp_proj(norm(x[:, :-1]))  # B, T-1, D
+                mtp_hidden = self.mtp_proj(norm(x))  # B, T, D (full seq for MXFP8)
                 mtp_logits = self.lm_head(mtp_hidden).float()
                 mtp_logits = softcap * torch.tanh(mtp_logits / softcap)
-                mtp_targets = targets[:, 1:].contiguous()  # shift targets by 1 more = t+2
+                mtp_logits = mtp_logits[:, :-1]  # slice after lm_head: positions 0..T-2
+                mtp_targets = targets[:, 1:].contiguous()  # targets t+2
                 mtp_loss = F.cross_entropy(
                     mtp_logits.reshape(-1, mtp_logits.size(-1)),
                     mtp_targets.reshape(-1),
