@@ -419,11 +419,14 @@ class Block(nn.Module):
         x_prev = torch.roll(x, 1, dims=1)
         x_prev[:, 0, :] = x[:, 0, :]
         x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
-        x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
+        # Parallel attention + MLP (PaLM/GPT-J style): both see same input
+        x_normed = norm(x)
+        attn_out = norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
-            x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
+            mlp_out = norm(torch_checkpoint(self.mlp, x_normed, use_reentrant=False))
         else:
-            x = x + norm(self.mlp(norm(x)))
+            mlp_out = norm(self.mlp(x_normed))
+        x = x + attn_out + mlp_out
         return x
 
 
