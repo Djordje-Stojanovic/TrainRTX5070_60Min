@@ -769,10 +769,11 @@ class MuonAdamW(torch.optim.Optimizer):
         torch._foreach_copy_(params, list(stacked_params.unbind(0)))
 
     @torch.no_grad()
-    def step(self):
+    def step(self, step_adamw=True):
         for group in self.param_groups:
             if group["kind"] == "adamw":
-                self._step_adamw(group)
+                if step_adamw:
+                    self._step_adamw(group)
             elif group["kind"] == "muon":
                 self._step_muon(group)
 
@@ -1148,8 +1149,18 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
             if group["kind"] == "muon":
                 group["momentum"] = muon_momentum
                 group["weight_decay"] = muon_weight_decay
-        optimizer.step()
-        model.zero_grad(set_to_none=True)
+        # Heterogeneous batching: AdamW params (embed/head) step every 2nd step
+        # for 2x effective batch size (less noisy gradients for 50K-vocab params)
+        step_adamw = (step % 2 == 1)
+        optimizer.step(step_adamw=step_adamw)
+        if step_adamw:
+            model.zero_grad(set_to_none=True)
+        else:
+            # Zero only Muon grads; keep AdamW grads accumulating
+            for group in optimizer.param_groups:
+                if group["kind"] == "muon":
+                    for p in group["params"]:
+                        p.grad = None
 
         train_loss_f = train_loss.item()
         if train_loss_f > 100:
