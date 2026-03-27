@@ -770,7 +770,7 @@ class MuonAdamW(torch.optim.Optimizer):
 
 # Model architecture
 ASPECT_RATIO = 48         # model_dim = depth * ASPECT_RATIO
-HEAD_DIM = 96             # target head dimension (8 heads @ 768 dim, Nemotron-inspired: more heads = more attention diversity)
+HEAD_DIM = 128            # target head dimension for attention
 WINDOW_PATTERN = "SSSL"   # sliding window on early layers, full on every 4th
 SHORT_WINDOW = 256        # short window size in tokens (modded-nanogpt uses 128-384)
 
