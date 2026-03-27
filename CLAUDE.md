@@ -8,6 +8,7 @@
 4. **ALWAYS push after every experiment** — `git push origin autoresearch/mar10`
 5. **NEVER stop the loop** — run experiments forever until manually interrupted
 6. **NEVER change fairness invariants** — TIME_BUDGET, MAX_SEQ_LEN, evaluate_bpb(), dataset/tokenizer
+7. **ALWAYS deduplicate before experimenting** — Before writing ANY code for a new experiment, grep `results.tsv` for keywords related to your planned change. If it was already tried, DO NOT repeat it. Read the prior result's description to understand why it failed. Pick something genuinely new instead. Wasting 60+ minutes re-running a failed experiment is a critical bug.
 
 ## Post-Experiment Checklist (execute EVERY time, in order)
 
@@ -37,6 +38,12 @@ git push origin autoresearch/mar10
 - Good: "COMPONENT_A changed from X→Y (hypothesis: [bottleneck] limits val_bpb, evidence: [metric or web search]): val_bpb 1.15→1.10, confirms [bottleneck] was the issue"
 
 **Before proposing a new experiment, read results.tsv** to see what was already tried. Do not repeat a failed direction.
+
+**MANDATORY DEDUPLICATION STEP:** Before writing ANY code, run `grep -i "keyword1\|keyword2\|keyword3" results.tsv` with keywords relevant to your planned experiment (e.g., component names, technique names, hyperparameter names). If ANY prior experiment attempted something similar, READ its full description to understand why it failed. Only proceed if your approach is fundamentally different (not just a different hyperparameter value of the same idea). Document what's different in your commit message. Examples of duplicates to avoid:
+- "backout mechanism" if backout was already tried (even with different init/layer)
+- "window size X" if multiple window experiments already failed
+- "softcap Y" if softcap changes were already tried
+- "batch size Z" if batch size was already explored in both directions
 
 ## What is this?
 
