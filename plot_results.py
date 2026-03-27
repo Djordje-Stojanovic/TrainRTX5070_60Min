@@ -73,6 +73,14 @@ def plot(df, save_path=None):
                 fontsize=6, color="#333333", rotation=25,
                 ha="left", va="bottom",
             )
+    # Auto-zoom y-axis to useful range (exclude extreme outliers)
+    if not valid.empty:
+        valid_bpb = valid["val_bpb"]
+        bpb_median = valid_bpb.median()
+        # Cap y-axis at median + 0.05 to exclude catastrophic outliers
+        y_max = min(valid_bpb.max(), bpb_median + 0.05)
+        y_min = valid_bpb.min() - 0.005
+        ax_bpb.set_ylim(y_min, y_max)
     ax_bpb.set_xlabel("Experiment #", fontsize=10)
     ax_bpb.set_ylabel("val_bpb (lower is better)", fontsize=10)
     ax_bpb.legend(fontsize=8, loc="upper right")
