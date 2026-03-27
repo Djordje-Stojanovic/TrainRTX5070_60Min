@@ -599,6 +599,10 @@ class GPT(nn.Module):
 
         softcap = 15
         logits = self.lm_head(x).float()
+        # Asymmetric logit rescale: widen dynamic range in forward (alpha=2)
+        # but keep gradients unchanged (detach trick: forward sees *alpha, backward sees *1)
+        logit_alpha = 2.0
+        logits = logits + logits.detach() * (logit_alpha - 1)
         logits = softcap * torch.tanh(logits / softcap)
 
         if targets is not None:
