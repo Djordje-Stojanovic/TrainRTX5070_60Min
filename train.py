@@ -412,15 +412,6 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = MLP(config)
         self.use_mlp_checkpointing = config.use_activation_checkpointing
-        # DyT (Dynamic Tanh) replaces Peri-LN post-norm
-        d = config.n_embd
-        self.dyt_alpha_attn = nn.Parameter(torch.tensor(1.0))
-        self.dyt_gamma_attn = nn.Parameter(torch.ones(d))
-        self.dyt_alpha_mlp = nn.Parameter(torch.tensor(1.0))
-        self.dyt_gamma_mlp = nn.Parameter(torch.ones(d))
-
-    def _dyt(self, x, alpha, gamma):
-        return gamma * torch.tanh(alpha * x)
 
     def forward(self, x, cos_sin, window_size, ve=None):
         # Token shift: mix last quarter of channels with previous position
@@ -428,13 +419,11 @@ class Block(nn.Module):
         x_prev = torch.roll(x, 1, dims=1)
         x_prev[:, 0, :] = x[:, 0, :]
         x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
-        attn_out = self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve)
-        x = x + self._dyt(attn_out, self.dyt_alpha_attn, self.dyt_gamma_attn)
+        x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
-            mlp_out = torch_checkpoint(self.mlp, norm(x), use_reentrant=False)
+            x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
         else:
-            mlp_out = self.mlp(norm(x))
-        x = x + self._dyt(mlp_out, self.dyt_alpha_mlp, self.dyt_gamma_mlp)
+            x = x + norm(self.mlp(norm(x)))
         return x
 
 
@@ -549,10 +538,7 @@ class GPT(nn.Module):
     def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02,
                         weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5):
         model_dim = self.config.n_embd
-        all_h_params = list(self.transformer.h.parameters())
-        # Separate DyT params (0D scalars, 1D vectors) from matrix params (2D+) for optimizer
-        dyt_params = [p for p in all_h_params if p.ndim <= 1]
-        matrix_params = [p for p in all_h_params if p.ndim >= 2]
+        matrix_params = list(self.transformer.h.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         value_emb_params = list(self.value_emb.parameters())
         lm_head_params = list(self.lm_head.parameters())
@@ -560,7 +546,6 @@ class GPT(nn.Module):
         x0_params = [self.x0_lambdas]
         assert len(list(self.parameters())) == (
             len(matrix_params)
-            + len(dyt_params)
             + len(embedding_params)
             + len(value_emb_params)
             + len(lm_head_params)
@@ -575,7 +560,6 @@ class GPT(nn.Module):
             dict(kind="adamw", params=value_emb_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
-            dict(kind="adamw", params=dyt_params, lr=scalar_lr * 0.1, betas=adam_betas, eps=1e-10, weight_decay=0.0),
         ]
         muon_group_chunk = 8
         for shape in sorted({p.shape for p in matrix_params}):
