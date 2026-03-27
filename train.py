@@ -491,18 +491,12 @@ class GPT(nn.Module):
         pattern = config.window_pattern.upper()
         assert all(c in "SL" for c in pattern)
         long_window = config.sequence_len
-        # Multi-scale S-layer windows: cycle 128, 256, 384 (avg=256)
-        s_windows = [128, 256, 384]
-        s_idx = 0
+        short_window = config.short_window
+        char_to_window = {"L": (long_window, 0), "S": (short_window, 0)}
         window_sizes = []
         for layer_idx in range(config.n_layer):
             char = pattern[layer_idx % len(pattern)]
-            if char == "L":
-                window_sizes.append((long_window, 0))
-            else:
-                w = s_windows[s_idx % len(s_windows)]
-                window_sizes.append((w, 0))
-                s_idx += 1
+            window_sizes.append(char_to_window[char])
         window_sizes[-1] = (long_window, 0)
         return window_sizes
 
