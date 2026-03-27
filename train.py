@@ -431,7 +431,7 @@ class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.window_sizes = self._compute_window_sizes(config)
+        self.window_sizes = self._compute_window_sizes(config, short_override=128, long_override=512)
         self.transformer = nn.ModuleDict({
             "wte": nn.Embedding(config.vocab_size, config.n_embd),
             "h": nn.ModuleList([Block(config, i) for i in range(config.n_layer)]),
@@ -487,11 +487,11 @@ class GPT(nn.Module):
         cos, sin = cos[None, :, None, :], sin[None, :, None, :]
         return cos, sin
 
-    def _compute_window_sizes(self, config):
+    def _compute_window_sizes(self, config, short_override=None, long_override=None):
         pattern = config.window_pattern.upper()
         assert all(c in "SL" for c in pattern)
-        long_window = config.sequence_len
-        short_window = config.short_window
+        long_window = long_override if long_override is not None else config.sequence_len
+        short_window = short_override if short_override is not None else config.short_window
         char_to_window = {"L": (long_window, 0), "S": (short_window, 0)}
         window_sizes = []
         for layer_idx in range(config.n_layer):
@@ -499,6 +499,15 @@ class GPT(nn.Module):
             window_sizes.append(char_to_window[char])
         window_sizes[-1] = (long_window, 0)
         return window_sizes
+
+    def update_windows_for_progress(self, progress):
+        """Window warmup: start with small windows, expand at 50% training."""
+        if progress < 0.5:
+            new_sizes = self._compute_window_sizes(self.config, short_override=128, long_override=512)
+        else:
+            new_sizes = self._compute_window_sizes(self.config)  # full: S=256, L=2048
+        if new_sizes != self.window_sizes:
+            self.window_sizes = new_sizes
 
     def estimate_flops(self):
         """Estimated FLOPs per token (forward + backward)."""
@@ -513,7 +522,9 @@ class GPT(nn.Module):
         q = self.config.n_embd // self.config.n_head
         t = self.config.sequence_len
         attn_flops = 0
-        for window_size in self.window_sizes:
+        # Use full (final) window sizes for consistent MFU reporting
+        full_windows = self._compute_window_sizes(self.config)
+        for window_size in full_windows:
             window = window_size[0]
             effective_seq = t if window < 0 else min(window, t)
             attn_flops += 12 * h * q * effective_seq
@@ -1127,6 +1138,7 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
             x, y, epoch = next(train_loader)
 
         progress = min(total_training_time / max(target_training_seconds, 1e-6), 1.0)
+        model.update_windows_for_progress(progress)
         lrm = get_lr_multiplier(progress)
         muon_momentum = get_muon_momentum(step)
         muon_weight_decay = get_weight_decay(progress)
