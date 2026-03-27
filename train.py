@@ -1056,15 +1056,13 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
             torch.ops.load_library(str(_mxfp8_pyd))
         from torchao.quantization import quantize_
         from torchao.prototype.mx_formats import MXLinearConfig
-        # Try MXFP4 first (Nemotron-inspired: native FP4 training on Blackwell)
-        _mx_recipe = os.environ.get('MX_RECIPE', 'mxfp4_cutlass')
-        _mx_cfg = MXLinearConfig.from_recipe_name(_mx_recipe)
+        _mx_cfg = MXLinearConfig.from_recipe_name('mxfp8_cublas')
         def _mxfp8_filter(mod, fqn):
             if isinstance(mod, nn.Linear):
                 return mod.in_features % 32 == 0 and mod.out_features % 32 == 0
             return False
         quantize_(model, _mx_cfg, filter_fn=_mxfp8_filter)
-        print(f"{_mx_recipe} training enabled (skipped layers with dims not divisible by 32)")
+        print(f"MXFP8 cuBLAS training enabled (skipped layers with dims not divisible by 32)")
     except Exception as e:
         print(f"MXFP8 not available ({e}), falling back to standard FP8")
         try:
