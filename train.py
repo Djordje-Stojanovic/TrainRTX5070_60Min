@@ -414,11 +414,11 @@ class Block(nn.Module):
         self.use_mlp_checkpointing = config.use_activation_checkpointing
 
     def forward(self, x, cos_sin, window_size, ve=None):
-        # Token shift: mix last quarter of channels with previous position
-        quarter = x.size(-1) // 4
+        # Token shift: mix last third of channels with previous position
+        shift_dim = x.size(-1) // 3
         x_prev = torch.roll(x, 1, dims=1)
         x_prev[:, 0, :] = x[:, 0, :]
-        x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
+        x_attn_in = torch.cat([x[:, :, :x.size(-1)-shift_dim], x_prev[:, :, x.size(-1)-shift_dim:]], dim=-1)
         x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
             x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
@@ -803,7 +803,7 @@ def build_model_config(depth, vocab_size, runtime, use_activation_checkpointing=
         vocab_size=vocab_size,
         n_layer=depth,
         n_head=num_heads,
-        n_kv_head=max(num_heads // 2, 1),
+        n_kv_head=num_heads,
         n_embd=model_dim,
         window_pattern=WINDOW_PATTERN,
         short_window=SHORT_WINDOW,
