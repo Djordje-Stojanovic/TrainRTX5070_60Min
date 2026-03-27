@@ -441,7 +441,6 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))
         self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))
-        self.backout_lambda = nn.Parameter(torch.zeros(1))  # init at 0 = no backout
         head_dim = config.n_embd // config.n_head
         self.rotary_seq_len = config.sequence_len
         cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim, dtype=config.compute_dtype)
@@ -466,7 +465,6 @@ class GPT(nn.Module):
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
         self.resid_lambdas.fill_(1.0)
         self.x0_lambdas.fill_(0.2)
-        self.backout_lambda.fill_(0.0)  # start with no backout, learn the fraction
         head_dim = self.config.n_embd // self.config.n_head
         cos, sin = self._precompute_rotary_embeddings(
             self.rotary_seq_len,
@@ -510,7 +508,6 @@ class GPT(nn.Module):
             + self.value_emb.weight.numel()
             + self.resid_lambdas.numel()
             + self.x0_lambdas.numel()
-            + self.backout_lambda.numel()
         )
         h = self.config.n_head
         q = self.config.n_embd // self.config.n_head
@@ -527,7 +524,7 @@ class GPT(nn.Module):
         value_emb = sum(p.numel() for p in self.value_emb.parameters())
         lm_head = sum(p.numel() for p in self.lm_head.parameters())
         transformer_matrices = sum(p.numel() for p in self.transformer.h.parameters())
-        scalars = self.resid_lambdas.numel() + self.x0_lambdas.numel() + self.backout_lambda.numel()
+        scalars = self.resid_lambdas.numel() + self.x0_lambdas.numel()
         total = wte + value_emb + lm_head + transformer_matrices + scalars
         return {
             "wte": wte,
@@ -547,7 +544,6 @@ class GPT(nn.Module):
         lm_head_params = list(self.lm_head.parameters())
         resid_params = [self.resid_lambdas]
         x0_params = [self.x0_lambdas]
-        backout_params = [self.backout_lambda]
         assert len(list(self.parameters())) == (
             len(matrix_params)
             + len(embedding_params)
@@ -555,7 +551,6 @@ class GPT(nn.Module):
             + len(lm_head_params)
             + len(resid_params)
             + len(x0_params)
-            + len(backout_params)
         )
         dmodel_lr_scale = (model_dim / 768) ** -0.5
         print(f"Scaling AdamW LRs by 1/sqrt({model_dim}/768) = {dmodel_lr_scale:.6f}")
@@ -565,7 +560,6 @@ class GPT(nn.Module):
             dict(kind="adamw", params=value_emb_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
-            dict(kind="adamw", params=backout_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
         ]
         muon_group_chunk = 8
         for shape in sorted({p.shape for p in matrix_params}):
@@ -597,17 +591,10 @@ class GPT(nn.Module):
         x = norm(x)
         x0 = x
         ve = self.value_emb(idx)
-        n_layers = len(self.transformer.h)
-        backout_layer = (2 * n_layers) // 3  # capture state at 2/3 depth
-        x_mid = None
         for i, block in enumerate(self.transformer.h):
             x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
             window_size = self.window_sizes[i]
             x = block(x, cos_sin, window_size, ve=ve)
-            if i == backout_layer - 1:
-                x_mid = x
-        # Backout: subtract learned fraction of mid-network residual
-        x = x - self.backout_lambda * x_mid
         x = norm(x)
 
         softcap = 15
@@ -769,11 +756,10 @@ class MuonAdamW(torch.optim.Optimizer):
         torch._foreach_copy_(params, list(stacked_params.unbind(0)))
 
     @torch.no_grad()
-    def step(self, step_adamw=True):
+    def step(self):
         for group in self.param_groups:
             if group["kind"] == "adamw":
-                if step_adamw:
-                    self._step_adamw(group)
+                self._step_adamw(group)
             elif group["kind"] == "muon":
                 self._step_muon(group)
 
@@ -1149,18 +1135,8 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
             if group["kind"] == "muon":
                 group["momentum"] = muon_momentum
                 group["weight_decay"] = muon_weight_decay
-        # Heterogeneous batching: AdamW params (embed/head) step every 2nd step
-        # for 2x effective batch size (less noisy gradients for 50K-vocab params)
-        step_adamw = (step % 2 == 1)
-        optimizer.step(step_adamw=step_adamw)
-        if step_adamw:
-            model.zero_grad(set_to_none=True)
-        else:
-            # Zero only Muon grads; keep AdamW grads accumulating
-            for group in optimizer.param_groups:
-                if group["kind"] == "muon":
-                    for p in group["params"]:
-                        p.grad = None
+        optimizer.step()
+        model.zero_grad(set_to_none=True)
 
         train_loss_f = train_loss.item()
         if train_loss_f > 100:
