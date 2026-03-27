@@ -406,20 +406,48 @@ class MLP(nn.Module):
         return self.c_proj(F.silu(self.c_gate(x)) * self.c_up(x))
 
 
-class Block(nn.Module):
-    def __init__(self, config, layer_idx):
+class ConvGate(nn.Module):
+    """Lightweight local context mixer inspired by Mamba/Nemotron hybrid.
+    Replaces attention in short-window layers with depthwise conv + gating."""
+    def __init__(self, config):
         super().__init__()
-        self.attn = CausalSelfAttention(config, layer_idx)
+        d = config.n_embd
+        # Depthwise causal conv (kernel=4, like Mamba)
+        self.conv = nn.Conv1d(d, d, kernel_size=4, groups=d, padding=3, bias=False)
+        # Gating projection (like Mamba's gate)
+        self.gate_proj = nn.Linear(d, d, bias=False)
+        self.out_proj = nn.Linear(d, d, bias=False)
+
+    def forward(self, x, cos_sin=None, window_size=None, ve=None):
+        B, T, D = x.size()
+        # Causal depthwise conv: pad left, truncate right
+        h = self.conv(x.transpose(1, 2))[:, :, :T].transpose(1, 2)
+        gate = torch.sigmoid(self.gate_proj(x))
+        return self.out_proj(F.silu(h) * gate)
+
+
+class Block(nn.Module):
+    def __init__(self, config, layer_idx, use_conv=False):
+        super().__init__()
+        self.use_conv = use_conv
+        if use_conv:
+            self.attn = ConvGate(config)
+        else:
+            self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = MLP(config)
         self.use_mlp_checkpointing = config.use_activation_checkpointing
 
     def forward(self, x, cos_sin, window_size, ve=None):
-        # Token shift: mix last quarter of channels with previous position
-        quarter = x.size(-1) // 4
-        x_prev = torch.roll(x, 1, dims=1)
-        x_prev[:, 0, :] = x[:, 0, :]
-        x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
-        x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
+        if self.use_conv:
+            # Conv layers don't need token shift (conv provides local context)
+            x = x + norm(self.attn(norm(x)))
+        else:
+            # Token shift: mix last quarter of channels with previous position
+            quarter = x.size(-1) // 4
+            x_prev = torch.roll(x, 1, dims=1)
+            x_prev[:, 0, :] = x[:, 0, :]
+            x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
+            x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
             x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
         else:
@@ -432,9 +460,14 @@ class GPT(nn.Module):
         super().__init__()
         self.config = config
         self.window_sizes = self._compute_window_sizes(config)
+        # Hybrid: S-layers use ConvGate (Mamba-inspired), L-layers use attention
+        blocks = []
+        for i in range(config.n_layer):
+            is_short = self.window_sizes[i][0] < config.sequence_len
+            blocks.append(Block(config, i, use_conv=is_short))
         self.transformer = nn.ModuleDict({
             "wte": nn.Embedding(config.vocab_size, config.n_embd),
-            "h": nn.ModuleList([Block(config, i) for i in range(config.n_layer)]),
+            "h": nn.ModuleList(blocks),
         })
         kv_dim = config.n_kv_head * (config.n_embd // config.n_head)
         self.value_emb = nn.Embedding(config.vocab_size, kv_dim)
@@ -455,11 +488,18 @@ class GPT(nn.Module):
         n_embd = self.config.n_embd
         s = 3 ** 0.5 * n_embd ** -0.5
         for block in self.transformer.h:
-            torch.nn.init.uniform_(block.attn.c_q.weight, -s, s)
-            torch.nn.init.uniform_(block.attn.c_k.weight, -s, s)
-            torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
-            torch.nn.init.zeros_(block.attn.c_proj.weight)
-            torch.nn.init.zeros_(block.attn.ve_gate.weight)  # sigmoid(0)=0.5, gate=1.5
+            if block.use_conv:
+                # ConvGate init
+                torch.nn.init.normal_(block.attn.conv.weight, std=0.02)
+                torch.nn.init.uniform_(block.attn.gate_proj.weight, -s, s)
+                torch.nn.init.zeros_(block.attn.out_proj.weight)
+            else:
+                # Attention init
+                torch.nn.init.uniform_(block.attn.c_q.weight, -s, s)
+                torch.nn.init.uniform_(block.attn.c_k.weight, -s, s)
+                torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
+                torch.nn.init.zeros_(block.attn.c_proj.weight)
+                torch.nn.init.zeros_(block.attn.ve_gate.weight)  # sigmoid(0)=0.5, gate=1.5
             torch.nn.init.uniform_(block.mlp.c_gate.weight, -s, s)
             torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
