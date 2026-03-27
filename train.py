@@ -439,8 +439,6 @@ class GPT(nn.Module):
         kv_dim = config.n_kv_head * (config.n_embd // config.n_head)
         self.value_emb = nn.Embedding(config.vocab_size, kv_dim)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # MTP: shared-weight auxiliary head for predicting t+2 (Nemotron 3 Super inspired)
-        self.mtp_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
         self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))
         self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))
         head_dim = config.n_embd // config.n_head
@@ -454,7 +452,6 @@ class GPT(nn.Module):
         torch.nn.init.normal_(self.transformer.wte.weight, mean=0.0, std=1.0)
         torch.nn.init.normal_(self.value_emb.weight, mean=0.0, std=0.02)
         torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
-        torch.nn.init.normal_(self.mtp_proj.weight, mean=0.0, std=0.02)
         n_embd = self.config.n_embd
         s = 3 ** 0.5 * n_embd ** -0.5
         for block in self.transformer.h:
@@ -509,7 +506,6 @@ class GPT(nn.Module):
         nparams_exclude = (
             self.transformer.wte.weight.numel()
             + self.value_emb.weight.numel()
-            + self.mtp_proj.weight.numel()
             + self.resid_lambdas.numel()
             + self.x0_lambdas.numel()
         )
@@ -527,15 +523,13 @@ class GPT(nn.Module):
         wte = sum(p.numel() for p in self.transformer.wte.parameters())
         value_emb = sum(p.numel() for p in self.value_emb.parameters())
         lm_head = sum(p.numel() for p in self.lm_head.parameters())
-        mtp_proj = sum(p.numel() for p in self.mtp_proj.parameters())
         transformer_matrices = sum(p.numel() for p in self.transformer.h.parameters())
         scalars = self.resid_lambdas.numel() + self.x0_lambdas.numel()
-        total = wte + value_emb + lm_head + mtp_proj + transformer_matrices + scalars
+        total = wte + value_emb + lm_head + transformer_matrices + scalars
         return {
             "wte": wte,
             "value_emb": value_emb,
             "lm_head": lm_head,
-            "mtp_proj": mtp_proj,
             "transformer_matrices": transformer_matrices,
             "scalars": scalars,
             "total": total,
@@ -548,7 +542,6 @@ class GPT(nn.Module):
         embedding_params = list(self.transformer.wte.parameters())
         value_emb_params = list(self.value_emb.parameters())
         lm_head_params = list(self.lm_head.parameters())
-        mtp_proj_params = list(self.mtp_proj.parameters())
         resid_params = [self.resid_lambdas]
         x0_params = [self.x0_lambdas]
         assert len(list(self.parameters())) == (
@@ -556,7 +549,6 @@ class GPT(nn.Module):
             + len(embedding_params)
             + len(value_emb_params)
             + len(lm_head_params)
-            + len(mtp_proj_params)
             + len(resid_params)
             + len(x0_params)
         )
@@ -569,11 +561,9 @@ class GPT(nn.Module):
             dict(kind="adamw", params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
         ]
-        # MTP projection uses Muon like other matrices
-        all_matrix_params = matrix_params + mtp_proj_params
         muon_group_chunk = 8
-        for shape in sorted({p.shape for p in all_matrix_params}):
-            group_params = [p for p in all_matrix_params if p.shape == shape]
+        for shape in sorted({p.shape for p in matrix_params}):
+            group_params = [p for p in matrix_params if p.shape == shape]
             for ci in range(0, len(group_params), muon_group_chunk):
                 chunk = group_params[ci:ci + muon_group_chunk]
                 param_groups.append(
@@ -618,21 +608,6 @@ class GPT(nn.Module):
                 ignore_index=-1,
                 reduction=reduction,
             )
-            # MTP: predict t+2 using shared lm_head (Nemotron 3 Super inspired)
-            # Compute on full T to keep MXFP8 alignment (dims must be multiple of 32)
-            if T > 2:
-                mtp_hidden = self.mtp_proj(norm(x))  # B, T, D (full seq for MXFP8)
-                mtp_logits = self.lm_head(mtp_hidden).float()
-                mtp_logits = softcap * torch.tanh(mtp_logits / softcap)
-                mtp_logits = mtp_logits[:, :-1]  # slice after lm_head: positions 0..T-2
-                mtp_targets = targets[:, 1:].contiguous()  # targets t+2
-                mtp_loss = F.cross_entropy(
-                    mtp_logits.reshape(-1, mtp_logits.size(-1)),
-                    mtp_targets.reshape(-1),
-                    ignore_index=-1,
-                    reduction=reduction,
-                )
-                loss = loss + 0.15 * mtp_loss
             return loss
         return logits
 
