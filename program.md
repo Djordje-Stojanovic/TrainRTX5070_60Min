@@ -115,6 +115,9 @@ The experiment runs on a dedicated branch (e.g. `autoresearch/mar10`).
 LOOP FOREVER:
 
 0. **Plan:** Read `results.tsv` (what's been tried), then identify what is most limiting val_bpb (see Bottleneck-First Rule in `CLAUDE.md`). Your next experiment must target that — structural change or hyperparameter tuning, whichever has highest expected impact. Write your commit message with: `Bottleneck: [what's limiting val_bpb]. Hypothesis: [change] will improve because [reason]. Evidence: [prior experiment / web search / metric].` If you have no evidence, search the web first. **Every 5th experiment**, do a landscape scan across ALL search areas listed in `CLAUDE.md` — architecture, training, optimizer, hardware, memory, throughput, frontier techniques. Don't get tunnel-visioned on one area.
+
+   **MANDATORY DEDUPLICATION CHECK (before EVERY experiment):**
+   Before writing any code, grep `results.tsv` for keywords related to your planned change (e.g., `grep -i "backout\|window\|batch.*size\|softcap"` etc.). If a similar experiment was already tried, DO NOT repeat it — the result will be the same. Read the description of the prior attempt to understand WHY it failed, then either (a) pick a genuinely different experiment, or (b) if you believe the prior attempt was flawed in a specific way you can fix, document exactly what's different this time in your commit message. "Same idea but different hyperparameter" counts as a repeat if the prior experiment's conclusion rules it out.
 1. `git pull origin autoresearch/mar10` — pick up any doc updates pushed between experiments.
 2. Make your experimental change (primarily `train.py`, but other files if needed per the rules in `CLAUDE.md`).
 3. git commit (with the hypothesis from step 0 in the message)
