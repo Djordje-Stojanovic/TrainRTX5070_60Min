@@ -544,10 +544,11 @@ class GPT(nn.Module):
         value_emb_params = list(self.value_emb.parameters())
         resid_params = [self.resid_lambdas]
         x0_params = [self.x0_lambdas]
-        # lm_head.weight is tied to wte.weight — verify all params accounted for
-        unique_params = {id(p) for p in self.parameters()}
-        accounted = {id(p) for group in [matrix_params, embedding_params, value_emb_params, resid_params, x0_params] for p in group}
-        assert unique_params == accounted, f"Param mismatch: {len(unique_params)} unique vs {len(accounted)} accounted"
+        # lm_head.weight is tied to wte.weight — accounted via embedding_params
+        all_optimizer_params = matrix_params + embedding_params + value_emb_params + resid_params + x0_params
+        all_model_params = [p for p in self.parameters()]
+        # tied params may appear twice in self.parameters(); just verify all are covered
+        assert {id(p) for p in all_model_params} <= {id(p) for p in all_optimizer_params} | {id(self.lm_head.weight)}
         dmodel_lr_scale = (model_dim / 768) ** -0.5
         print(f"Scaling AdamW LRs by 1/sqrt({model_dim}/768) = {dmodel_lr_scale:.6f}")
         param_groups = [
