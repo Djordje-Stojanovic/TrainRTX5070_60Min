@@ -303,6 +303,7 @@ def _maybe_compile(obj, **kwargs):
 class GPTConfig:
     sequence_len: int = 2048
     vocab_size: int = 32768
+    real_vocab_size: int = 0  # actual vocab before MXFP8 padding (0 = same as vocab_size)
     n_layer: int = 12
     n_head: int = 6
     n_kv_head: int = 6
@@ -599,6 +600,9 @@ class GPT(nn.Module):
 
         softcap = 15
         logits = self.lm_head(x).float()
+        real_vocab = self.config.real_vocab_size or self.config.vocab_size
+        if logits.size(-1) > real_vocab:
+            logits = logits[:, :, :real_vocab]
         logits = softcap * torch.tanh(logits / softcap)
 
         if targets is not None:
@@ -798,9 +802,12 @@ def build_model_config(depth, vocab_size, runtime, use_activation_checkpointing=
     base_dim = depth * ASPECT_RATIO
     model_dim = ((base_dim + HEAD_DIM - 1) // HEAD_DIM) * HEAD_DIM
     num_heads = model_dim // HEAD_DIM
+    # Pad vocab to multiple of 32 so lm_head qualifies for MXFP8 quantization
+    padded_vocab = ((vocab_size + 31) // 32) * 32
     return GPTConfig(
         sequence_len=MAX_SEQ_LEN,
-        vocab_size=vocab_size,
+        vocab_size=padded_vocab,
+        real_vocab_size=vocab_size,
         n_layer=depth,
         n_head=num_heads,
         n_kv_head=num_heads,
