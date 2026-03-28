@@ -1066,6 +1066,9 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         _mx_cfg = MXLinearConfig.from_recipe_name('mxfp8_cublas')
         def _mxfp8_filter(mod, fqn):
             if isinstance(mod, nn.Linear):
+                # Exclude lm_head: MXFP8 cublas has contiguity issues with large vocab-sized outputs
+                if 'lm_head' in fqn:
+                    return False
                 return mod.in_features % 32 == 0 and mod.out_features % 32 == 0
             return False
         quantize_(model, _mx_cfg, filter_fn=_mxfp8_filter)
