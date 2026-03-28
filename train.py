@@ -602,7 +602,7 @@ class GPT(nn.Module):
         logits = self.lm_head(x).float()
         real_vocab = self.config.real_vocab_size or self.config.vocab_size
         if logits.size(-1) > real_vocab:
-            logits = logits[:, :, :real_vocab]
+            logits = logits[:, :, :real_vocab].contiguous()
         logits = softcap * torch.tanh(logits / softcap)
 
         if targets is not None:
