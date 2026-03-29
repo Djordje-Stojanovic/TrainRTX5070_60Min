@@ -75,7 +75,7 @@ train.py        — Model, optimizer, training loop. PRIMARY EDIT TARGET.
 prepare.py      — Data pipeline, tokenizer, evaluation, constants.
 pyproject.toml  — Dependencies.
 results.tsv     — Experiment log (created during runs).
-ideas.tsv       — Persistent experiment idea queue (TSV). status=pending|tried. Try pending from top (FIFO), add new at bottom.
+ideas.tsv       — Persistent experiment idea queue (TSV, FIFO). Columns: id|status|idea|category|impact|evidence|notes. Status: pending→trying→done. Each idea has a UUID referenced in results.tsv descriptions as [idea:UUID].
 ```
 
 ## MFU Measurement Caveat
@@ -241,6 +241,30 @@ Your context is finite. To maximize experiments per session:
 - **Never cat run.log** — always use `grep` for specific metrics
 - After 8+ experiments, re-read `results.tsv` to refresh what was tried
 - Keep commit messages informative — they're your notes for after context truncation
+
+## Ideas Queue Protocol (`ideas.tsv`)
+
+The ideas queue persists across sessions so promising experiment ideas are never lost.
+
+**Format:** TSV with columns: `id`, `status`, `idea`, `category`, `impact`, `evidence`, `notes`
+
+**Statuses:**
+- `pending` — Not yet tried. Pick from the top (FIFO order).
+- `trying` — Currently running. Only ONE idea should be `trying` at a time.
+- `done` — Experiment completed. Result is in `results.tsv` (linked by `[idea:UUID]` in the description).
+
+**Workflow:**
+1. Before each experiment, check `ideas.tsv` for `pending` ideas. Pick the topmost one.
+2. Set its status to `trying` before starting the experiment.
+3. When done, set its status to `done`. Log the result in `results.tsv` with `[idea:UUID]` in the description.
+4. After a landscape scan or when you have a new idea, check it against `results.tsv` first. Only add if genuinely new.
+5. Generate a 6-char hex UUID for each new idea: `python -c "import random; print(f'{random.randint(0,0xFFFFFF):06x}')"`
+
+**Rules:**
+- NEVER add an idea that's already been tried (grep `results.tsv` first).
+- NEVER have more than one `trying` idea at a time.
+- Ideas that require web research should note "search impl details first" in notes.
+- When a session starts, scan `trying` ideas — if one is stuck (no run in progress), reset it to `pending`.
 
 ## Tips for Good Experiments
 
