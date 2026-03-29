@@ -361,7 +361,7 @@ class CausalSelfAttention(nn.Module):
         self._mask_cache[cache_key] = mask
         return mask
 
-    def forward(self, x, cos_sin, window_size, ve=None, qk_gains=None):
+    def forward(self, x, cos_sin, window_size, ve=None):
         B, T, _ = x.size()
         q = self.c_q(x).view(B, T, self.n_head, self.head_dim)
         k = self.c_k(x).view(B, T, self.n_kv_head, self.head_dim)
@@ -374,9 +374,6 @@ class CausalSelfAttention(nn.Module):
         cos, sin = cos_sin
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
         q, k = norm(q), norm(k)
-        if qk_gains is not None:
-            q = q * qk_gains[0]
-            k = k * qk_gains[1]
 
         q = q.transpose(1, 2)  # (B, H, T, D)
         k = k.transpose(1, 2)  # (B, KVH, T, D)
@@ -416,13 +413,13 @@ class Block(nn.Module):
         self.mlp = MLP(config)
         self.use_mlp_checkpointing = config.use_activation_checkpointing
 
-    def forward(self, x, cos_sin, window_size, ve=None, qk_gains=None):
+    def forward(self, x, cos_sin, window_size, ve=None):
         # Token shift: mix last quarter of channels with previous position
         quarter = x.size(-1) // 4
         x_prev = torch.roll(x, 1, dims=1)
         x_prev[:, 0, :] = x[:, 0, :]
         x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
-        x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve, qk_gains=qk_gains))
+        x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
             x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
         else:
@@ -444,9 +441,6 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))
         self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))
-        head_dim_qk = config.n_embd // config.n_head
-        self.q_norm_gains = nn.Parameter(torch.ones(config.n_layer, head_dim_qk))
-        self.k_norm_gains = nn.Parameter(torch.ones(config.n_layer, head_dim_qk))
         head_dim = config.n_embd // config.n_head
         self.rotary_seq_len = config.sequence_len
         cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim, dtype=config.compute_dtype)
@@ -514,8 +508,6 @@ class GPT(nn.Module):
             + self.value_emb.weight.numel()
             + self.resid_lambdas.numel()
             + self.x0_lambdas.numel()
-            + self.q_norm_gains.numel()
-            + self.k_norm_gains.numel()
         )
         h = self.config.n_head
         q = self.config.n_embd // self.config.n_head
@@ -532,7 +524,7 @@ class GPT(nn.Module):
         value_emb = sum(p.numel() for p in self.value_emb.parameters())
         lm_head = sum(p.numel() for p in self.lm_head.parameters())
         transformer_matrices = sum(p.numel() for p in self.transformer.h.parameters())
-        scalars = self.resid_lambdas.numel() + self.x0_lambdas.numel() + self.q_norm_gains.numel() + self.k_norm_gains.numel()
+        scalars = self.resid_lambdas.numel() + self.x0_lambdas.numel()
         total = wte + value_emb + lm_head + transformer_matrices + scalars
         return {
             "wte": wte,
@@ -552,7 +544,6 @@ class GPT(nn.Module):
         lm_head_params = list(self.lm_head.parameters())
         resid_params = [self.resid_lambdas]
         x0_params = [self.x0_lambdas]
-        qk_norm_params = [self.q_norm_gains, self.k_norm_gains]
         assert len(list(self.parameters())) == (
             len(matrix_params)
             + len(embedding_params)
@@ -560,7 +551,6 @@ class GPT(nn.Module):
             + len(lm_head_params)
             + len(resid_params)
             + len(x0_params)
-            + len(qk_norm_params)
         )
         dmodel_lr_scale = (model_dim / 768) ** -0.5
         print(f"Scaling AdamW LRs by 1/sqrt({model_dim}/768) = {dmodel_lr_scale:.6f}")
@@ -570,7 +560,6 @@ class GPT(nn.Module):
             dict(kind="adamw", params=value_emb_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
-            dict(kind="adamw", params=qk_norm_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
         ]
         muon_group_chunk = 8
         for shape in sorted({p.shape for p in matrix_params}):
@@ -605,7 +594,7 @@ class GPT(nn.Module):
         for i, block in enumerate(self.transformer.h):
             x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
             window_size = self.window_sizes[i]
-            x = block(x, cos_sin, window_size, ve=ve, qk_gains=(self.q_norm_gains[i], self.k_norm_gains[i]))
+            x = block(x, cos_sin, window_size, ve=ve)
         x = norm(x)
 
         softcap = 15
