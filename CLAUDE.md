@@ -75,7 +75,7 @@ train.py        — Model, optimizer, training loop. PRIMARY EDIT TARGET.
 prepare.py      — Data pipeline, tokenizer, evaluation, constants.
 pyproject.toml  — Dependencies.
 results.tsv     — Experiment log (created during runs).
-ideas.md        — Persistent experiment idea queue (FIFO). Add new ideas at bottom, try from top.
+ideas.tsv       — Persistent experiment idea queue (TSV). status=pending|tried. Try pending from top (FIFO), add new at bottom.
 ```
 
 ## MFU Measurement Caveat
@@ -128,7 +128,7 @@ If you are dropped into this repo on an `autoresearch/*` branch with results alr
 
 1. Read `CLAUDE.md` and `program.md` for context.
 2. Read `results.tsv` to see what's been tried and the current best val_bpb.
-3. Read `ideas.md` to see the experiment idea queue — try ideas from the top (FIFO).
+3. Read `ideas.tsv` to see the experiment idea queue — try `pending` ideas from the top (FIFO).
 4. Read `train.py` and `prepare.py` for the current code state.
 5. Continue the experiment loop from where it left off.
 
