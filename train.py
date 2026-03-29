@@ -640,7 +640,7 @@ def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momen
                     momentum_t, lr_t, wd_t, beta2_t, ns_steps, red_dim):
     momentum = momentum_t.to(stacked_grads.dtype)
     momentum_buffer.lerp_(stacked_grads, 1 - momentum)
-    g = stacked_grads.lerp_(momentum_buffer, momentum)
+    g = stacked_grads + momentum * momentum_buffer  # Nesterov look-ahead
     X = g.to(dtype=MUON_COMPUTE_DTYPE)
     X = X / (X.norm(dim=(-2, -1), keepdim=True) * 1.02 + 1e-6)
     if g.size(-2) > g.size(-1):
