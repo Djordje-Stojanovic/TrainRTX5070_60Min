@@ -438,8 +438,7 @@ class GPT(nn.Module):
         })
         kv_dim = config.n_kv_head * (config.n_embd // config.n_head)
         self.value_emb = nn.Embedding(config.vocab_size, kv_dim)
-        self.lm_head_proj = nn.Linear(config.n_embd, 384, bias=False)
-        self.lm_head = nn.Linear(384, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))
         self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))
         head_dim = config.n_embd // config.n_head
@@ -455,7 +454,6 @@ class GPT(nn.Module):
         torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
         n_embd = self.config.n_embd
         s = 3 ** 0.5 * n_embd ** -0.5
-        torch.nn.init.uniform_(self.lm_head_proj.weight, -s, s)
         for block in self.transformer.h:
             torch.nn.init.uniform_(block.attn.c_q.weight, -s, s)
             torch.nn.init.uniform_(block.attn.c_k.weight, -s, s)
@@ -524,7 +522,7 @@ class GPT(nn.Module):
     def num_scaling_params(self):
         wte = sum(p.numel() for p in self.transformer.wte.parameters())
         value_emb = sum(p.numel() for p in self.value_emb.parameters())
-        lm_head = sum(p.numel() for p in self.lm_head_proj.parameters()) + sum(p.numel() for p in self.lm_head.parameters())
+        lm_head = sum(p.numel() for p in self.lm_head.parameters())
         transformer_matrices = sum(p.numel() for p in self.transformer.h.parameters())
         scalars = self.resid_lambdas.numel() + self.x0_lambdas.numel()
         total = wte + value_emb + lm_head + transformer_matrices + scalars
@@ -543,7 +541,7 @@ class GPT(nn.Module):
         matrix_params = list(self.transformer.h.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         value_emb_params = list(self.value_emb.parameters())
-        lm_head_params = list(self.lm_head_proj.parameters()) + list(self.lm_head.parameters())
+        lm_head_params = list(self.lm_head.parameters())
         resid_params = [self.resid_lambdas]
         x0_params = [self.x0_lambdas]
         assert len(list(self.parameters())) == (
@@ -600,7 +598,7 @@ class GPT(nn.Module):
         x = norm(x)
 
         softcap = 15
-        logits = self.lm_head(self.lm_head_proj(x)).float()
+        logits = self.lm_head(x).float()
         logits = softcap * torch.tanh(logits / softcap)
 
         if targets is not None:
