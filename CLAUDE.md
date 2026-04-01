@@ -27,7 +27,11 @@ git add progress.png && git commit -m "chart: update progress.png"
 git checkout <pre-experiment-commit> -- train.py
 git commit -m "revert: undo <description>"
 
-# 5. Push everything
+# 5. Update ideas.tsv: DELETE the row for the idea just tried
+#    (the result is now in results.tsv — ideas.tsv is scratch only)
+git add ideas.tsv && git commit -m "ideas: remove <id> (tried)"
+
+# 6. Push everything
 git push origin autoresearch/mar10
 ```
 
@@ -244,27 +248,30 @@ Your context is finite. To maximize experiments per session:
 
 ## Ideas Queue Protocol (`ideas.tsv`)
 
-The ideas queue persists across sessions so promising experiment ideas are never lost.
+`ideas.tsv` is a **scratch queue of untried ideas only**. It is NOT a log — `results.tsv` is the long-term memory. Once an idea is tried, it gets **deleted** from `ideas.tsv` (the result lives in `results.tsv`).
 
 **Format:** TSV with columns: `id`, `status`, `idea`, `category`, `impact`, `evidence`, `notes`
 
 **Statuses:**
-- `pending` — Not yet tried. Pick from the top (FIFO order).
+- `pending` — Not yet tried. Pick from the top (priority order).
 - `trying` — Currently running. Only ONE idea should be `trying` at a time.
-- `done` — Experiment completed. Result is in `results.tsv` (linked by `[idea:UUID]` in the description).
+
+There is NO `done` status. When an experiment finishes, the idea is **removed** from `ideas.tsv`.
 
 **Workflow:**
-1. Before each experiment, check `ideas.tsv` for `pending` ideas. Pick the topmost one.
+1. Before each experiment, check `ideas.tsv` for `pending` ideas. Pick the topmost one. If it no longer makes sense (e.g., superseded by recent results), delete it and pick the next.
 2. Set its status to `trying` before starting the experiment.
-3. When done, set its status to `done`. Log the result in `results.tsv` with `[idea:UUID]` in the description.
-4. After a landscape scan or when you have a new idea, check it against `results.tsv` first. Only add if genuinely new.
+3. When the experiment finishes, **delete the row** from `ideas.tsv`. The result is logged in `results.tsv` with `[idea:UUID]` in the description — that's the permanent record.
+4. If `ideas.tsv` is empty (no pending ideas left), **first re-read `results.tsv`** to refresh what's been tried, then do a landscape scan (web search), add 2-5 viable new ideas sorted by priority (checking each against `results.tsv` before adding), then pick the top one.
 5. Generate a 6-char hex UUID for each new idea: `python -c "import random; print(f'{random.randint(0,0xFFFFFF):06x}')"`
 
 **Rules:**
-- NEVER add an idea that's already been tried (grep `results.tsv` first).
+- `ideas.tsv` must ONLY contain untried ideas. No history, no done entries.
+- NEVER add an idea that's already in `results.tsv` (grep first). If it was tried and failed/crashed/was noise-level, it's dead — don't re-add it.
 - NEVER have more than one `trying` idea at a time.
+- Keep ideas sorted by expected impact (HIGH first, LOW last).
+- When a session starts, audit `ideas.tsv`: delete anything already tried (grep `results.tsv`), reset stuck `trying` to `pending`.
 - Ideas that require web research should note "search impl details first" in notes.
-- When a session starts, scan `trying` ideas — if one is stuck (no run in progress), reset it to `pending`.
 
 ## Tips for Good Experiments
 
