@@ -542,9 +542,14 @@ class GPT(nn.Module):
         }
 
     def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02,
-                        weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5):
+                        weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5,
+                        c_proj_lr_mult=1.0):
         model_dim = self.config.n_embd
-        matrix_params = list(self.transformer.h.parameters())
+        # Separate MLP c_proj params for optional LR multiplier
+        mlp_cproj_ids = {id(block.mlp.c_proj.weight) for block in self.transformer.h}
+        all_h_params = list(self.transformer.h.parameters())
+        matrix_params = [p for p in all_h_params if id(p) not in mlp_cproj_ids]
+        mlp_cproj_params = [p for p in all_h_params if id(p) in mlp_cproj_ids]
         embedding_params = list(self.transformer.wte.parameters())
         value_emb_params = list(self.value_emb.parameters())
         lm_head_params = list(self.lm_head.parameters())
@@ -552,6 +557,7 @@ class GPT(nn.Module):
         x0_params = [self.x0_lambdas]
         assert len(list(self.parameters())) == (
             len(matrix_params)
+            + len(mlp_cproj_params)
             + len(embedding_params)
             + len(value_emb_params)
             + len(lm_head_params)
@@ -583,6 +589,23 @@ class GPT(nn.Module):
                         weight_decay=weight_decay,
                     )
                 )
+        # MLP c_proj with optional LR multiplier
+        if mlp_cproj_params:
+            for shape in sorted({p.shape for p in mlp_cproj_params}):
+                group_params = [p for p in mlp_cproj_params if p.shape == shape]
+                for ci in range(0, len(group_params), muon_group_chunk):
+                    chunk = group_params[ci:ci + muon_group_chunk]
+                    param_groups.append(
+                        dict(
+                            kind="muon",
+                            params=chunk,
+                            lr=matrix_lr * c_proj_lr_mult,
+                            momentum=0.95,
+                            ns_steps=5,
+                            beta2=0.98,
+                            weight_decay=weight_decay,
+                        )
+                    )
         optimizer = MuonAdamW(param_groups)
         for group in optimizer.param_groups:
             group["initial_lr"] = group["lr"]
@@ -885,6 +908,7 @@ def _benchmark_train_candidate(runtime, tokenizer, vocab_size, train_batch_size,
             adam_betas=ADAM_BETAS,
             matrix_lr=MATRIX_LR,
             weight_decay=WEIGHT_DECAY,
+            c_proj_lr_mult=2.0,
         )
         train_loader = make_dataloader(
             tokenizer,
@@ -1053,6 +1077,7 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         adam_betas=ADAM_BETAS,
         matrix_lr=MATRIX_LR,
         weight_decay=WEIGHT_DECAY,
+        c_proj_lr_mult=2.0,
     )
     # MXFP8 training: Blackwell-native block-32 microscaling FP8 via cuBLAS
     try:
