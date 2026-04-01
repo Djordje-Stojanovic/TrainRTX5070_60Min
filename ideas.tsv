@@ -10,3 +10,4 @@ c1d2e3	pending	Per-head learned temperature init=1.0 (not 0.2 like failed exp#77
 a4b5c6	pending	Cosine attention (L2-normalize QK to unit vectors not RMSNorm)	architecture	LOW	removes magnitude info entirely; could improve or hurt	simple to test
 fd01c8	done	Parametric QK-norm: learnable per-dim gain on Q and K after RMSNorm (init=1.0)	architecture	MEDIUM	diff from exp#77 scalar temp (init=0.2); per-dim gain allows selective feature emphasis	KILLED: MFU 82→74% torch.compile broken by GPT-level gains
 d7ea26	done	Key offset (k-shift): shift K non-RoPE dims by 1 position for induction heads	architecture	HIGH	modded-nanogpt WR uses this; enables 1-layer induction heads	zero-param; torch.roll on K pass-through dims after RoPE
+661b9f	trying	Muon momentum schedule cooldown 0.95→0.85 during warmdown phase	training	MEDIUM	modded-nanogpt uses 0.85→0.95→0.85 schedule; exp#59 tried increasing momentum (worse) this decreases it	already has warmup; add symmetric cooldown

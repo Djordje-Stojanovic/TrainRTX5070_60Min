@@ -1105,9 +1105,17 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
         cosine_decay = 0.5 * (1 + math.cos(math.pi * (1 - cooldown)))
         return cosine_decay * 1.0 + (1 - cosine_decay) * FINAL_LR_FRAC
 
-    def get_muon_momentum(step):
+    def get_muon_momentum(step, progress):
+        # Warmup: 0.85 → 0.95 over first 300 steps
         frac = min(step / 300, 1)
-        return (1 - frac) * 0.85 + frac * 0.95
+        if frac < 1:
+            return (1 - frac) * 0.85 + frac * 0.95
+        # Hold at 0.95 until warmdown starts, then decay to 0.85
+        warmdown_start = 1 - WARMDOWN_RATIO
+        if progress <= warmdown_start:
+            return 0.95
+        cooldown = (progress - warmdown_start) / WARMDOWN_RATIO
+        return 0.95 - 0.10 * cooldown
 
     def get_weight_decay(progress):
         return WEIGHT_DECAY * (1 - progress)
@@ -1134,7 +1142,7 @@ def _run_training_once(runtime, tokenizer, config, device_batch_size, smoke_test
 
         progress = min(total_training_time / max(target_training_seconds, 1e-6), 1.0)
         lrm = get_lr_multiplier(progress)
-        muon_momentum = get_muon_momentum(step)
+        muon_momentum = get_muon_momentum(step, progress)
         muon_weight_decay = get_weight_decay(progress)
         for group in optimizer.param_groups:
             group["lr"] = group["initial_lr"] * lrm
