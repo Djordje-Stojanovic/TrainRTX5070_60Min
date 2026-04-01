@@ -373,6 +373,12 @@ class CausalSelfAttention(nn.Module):
 
         cos, sin = cos_sin
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
+        # Key offset: shift non-RoPE (stationary) dims by 1 position for induction
+        rotary_dim = cos.shape[-1] * 2
+        k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
+        k_pass_shifted = torch.roll(k_pass, 1, dims=1)
+        k_pass_shifted[:, 0] = k_pass[:, 0]  # keep first position unchanged
+        k = torch.cat([k_rot, k_pass_shifted], dim=-1)
         q, k = norm(q), norm(k)
 
         q = q.transpose(1, 2)  # (B, H, T, D)
