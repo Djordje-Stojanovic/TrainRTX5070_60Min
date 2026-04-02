@@ -312,6 +312,7 @@ class GPTConfig:
     attention_backend: str = "sdpa"
     use_activation_checkpointing: bool = False
     compute_dtype: torch.dtype = torch.bfloat16
+    mlp_only_layers: tuple = ()
 
 
 def norm(x):
@@ -413,19 +414,22 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config, layer_idx):
+    def __init__(self, config, layer_idx, mlp_only=False):
         super().__init__()
-        self.attn = CausalSelfAttention(config, layer_idx)
+        self.mlp_only = mlp_only
+        if not mlp_only:
+            self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = MLP(config)
         self.use_mlp_checkpointing = config.use_activation_checkpointing
 
     def forward(self, x, cos_sin, window_size, ve=None):
-        # Token shift: mix last quarter of channels with previous position
-        quarter = x.size(-1) // 4
-        x_prev = torch.roll(x, 1, dims=1)
-        x_prev[:, 0, :] = x[:, 0, :]
-        x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
-        x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
+        if not self.mlp_only:
+            # Token shift: mix last quarter of channels with previous position
+            quarter = x.size(-1) // 4
+            x_prev = torch.roll(x, 1, dims=1)
+            x_prev[:, 0, :] = x[:, 0, :]
+            x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
+            x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
         if self.use_mlp_checkpointing:
             x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
         else:
@@ -440,7 +444,7 @@ class GPT(nn.Module):
         self.window_sizes = self._compute_window_sizes(config)
         self.transformer = nn.ModuleDict({
             "wte": nn.Embedding(config.vocab_size, config.n_embd),
-            "h": nn.ModuleList([Block(config, i) for i in range(config.n_layer)]),
+            "h": nn.ModuleList([Block(config, i, mlp_only=(i in config.mlp_only_layers)) for i in range(config.n_layer)]),
         })
         kv_dim = config.n_kv_head * (config.n_embd // config.n_head)
         self.value_emb = nn.Embedding(config.vocab_size, kv_dim)
@@ -461,11 +465,12 @@ class GPT(nn.Module):
         n_embd = self.config.n_embd
         s = 3 ** 0.5 * n_embd ** -0.5
         for block in self.transformer.h:
-            torch.nn.init.uniform_(block.attn.c_q.weight, -s, s)
-            torch.nn.init.uniform_(block.attn.c_k.weight, -s, s)
-            torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
-            torch.nn.init.zeros_(block.attn.c_proj.weight)
-            torch.nn.init.zeros_(block.attn.ve_gate.weight)  # sigmoid(0)=0.5, gate=1.5
+            if not block.mlp_only:
+                torch.nn.init.uniform_(block.attn.c_q.weight, -s, s)
+                torch.nn.init.uniform_(block.attn.c_k.weight, -s, s)
+                torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
+                torch.nn.init.zeros_(block.attn.c_proj.weight)
+                torch.nn.init.zeros_(block.attn.ve_gate.weight)  # sigmoid(0)=0.5, gate=1.5
             torch.nn.init.uniform_(block.mlp.c_gate.weight, -s, s)
             torch.nn.init.uniform_(block.mlp.c_up.weight, -s, s)
             torch.nn.init.zeros_(block.mlp.c_proj.weight)
@@ -817,6 +822,7 @@ FINAL_LR_FRAC = 0.1
 
 # Model size + memory defaults
 DEPTH = 16
+MLP_ONLY_LAYERS = {12, 13, 14}  # S-layers replaced with MLP-only for throughput
 DEVICE_BATCH_SIZE = 16
 EVAL_BATCH_SIZE = 8
 
@@ -839,6 +845,7 @@ def build_model_config(depth, vocab_size, runtime, use_activation_checkpointing=
         attention_backend=runtime.attention_backend,
         use_activation_checkpointing=use_activation_checkpointing,
         compute_dtype=runtime.amp_dtype,
+        mlp_only_layers=tuple(MLP_ONLY_LAYERS) if MLP_ONLY_LAYERS else (),
     )
 
 
