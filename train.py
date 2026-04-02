@@ -430,10 +430,19 @@ class Block(nn.Module):
             x_prev[:, 0, :] = x[:, 0, :]
             x_attn_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
             x = x + norm(self.attn(norm(x_attn_in), cos_sin, window_size, ve=ve))
-        if self.use_mlp_checkpointing:
-            x = x + norm(torch_checkpoint(self.mlp, norm(x), use_reentrant=False))
+        if self.mlp_only:
+            # Token shift for MLP-only layers: only local context source since no attention
+            quarter = x.size(-1) // 4
+            x_prev = torch.roll(x, 1, dims=1)
+            x_prev[:, 0, :] = x[:, 0, :]
+            x_mlp_in = torch.cat([x[:, :, :3*quarter], x_prev[:, :, 3*quarter:]], dim=-1)
+            x_normed = norm(x_mlp_in)
         else:
-            x = x + norm(self.mlp(norm(x)))
+            x_normed = norm(x)
+        if self.use_mlp_checkpointing:
+            x = x + norm(torch_checkpoint(self.mlp, x_normed, use_reentrant=False))
+        else:
+            x = x + norm(self.mlp(x_normed))
         return x
 
 
