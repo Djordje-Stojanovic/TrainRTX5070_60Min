@@ -1,4 +1,3 @@
 id	status	idea	category	impact	evidence	notes
-810b28	trying	Wider MLP in MLP-only layers: hidden 2048->3072 for layers 12-14	architecture	MEDIUM	VRAM freed by MLP-only (10.0 vs 10.5GB) allows wider MLP; same total params as pre-MLP-only	adds ~7M params back to 229M; more capacity where attention was removed
 fa7e30	pending	Attention c_proj 2x LR (like MLP c_proj 2x LR which improved +0.004)	hyperparameter	MEDIUM	MLP c_proj 2x LR worked; attention c_proj serves same output projection role	simple optimizer group change
 2661b7	pending	Multi-head Latent Attention (MLA): compress KV into low-rank latent	architecture	LOW	DeepSeek MLA; primarily inference optimization; low-rank may hurt quality at 200M	risky at our scale; deprioritized
