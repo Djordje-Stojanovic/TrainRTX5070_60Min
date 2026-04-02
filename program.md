@@ -43,7 +43,10 @@ Each experiment runs on a single RTX 5070 (12GB). The training script runs for a
 
 **Simplicity criterion**: All else being equal, simpler is better. A small improvement that adds ugly complexity is not worth it. Conversely, removing something and getting equal or better results is a great outcome — that's a simplification win. When evaluating whether to keep a change, weigh the complexity cost against the improvement magnitude. A 0.001 val_bpb improvement that adds 20 lines of hacky code? Probably not worth it. A 0.001 val_bpb improvement from deleting code? Definitely keep. An improvement of ~0 but much simpler code? Keep.
 
-**Minimum improvement threshold**: val_bpb improvements smaller than **0.003** are not reliably distinguishable from run-to-run variance (measured σ ≈ 0.0014–0.0020 across 4 identical runs). Don't keep a change that improves val_bpb by less than 0.003 unless it also simplifies the code.
+**Minimum improvement threshold** (two tiers):
+- **Hard minimum 0.002**: A change can be kept at ≥0.002 improvement IF it is lightweight (few lines, zero-parameter, simple) and you have confidence it's real signal not noise. Below 0.002 is always discard — firmly in the variance zone (σ ≈ 0.0014–0.0020).
+- **Soft target 0.003**: Novel, complex, or dramatic changes should aim for ≥0.003 to justify their complexity. Values like 0.0028 are also acceptable — it doesn't need to be exactly 0.003.
+- Changes that simplify the code can be kept even at noise-level improvement.
 
 **The first run**: Your very first run should always be to establish the baseline, so you will run the training script as is.
 

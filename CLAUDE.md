@@ -281,3 +281,4 @@ There is NO `done` status. When an experiment finishes, the idea is **removed** 
 - Check VRAM usage — unused VRAM is wasted potential
 - With 60-min budget, you get ~600-1200 optimizer steps — enough for real learning dynamics
 - Simpler is better at equal performance (see program.md simplicity criterion)
+- **Improvement thresholds:** Hard minimum 0.002 for lightweight/zero-param changes (must be confident it's signal not noise). Soft target 0.003 for complex/novel changes. Below 0.002 is always discard. See program.md for full details.
