@@ -1,3 +1,2 @@
 id	status	idea	category	impact	evidence	notes
-f6a7b8	trying	Blockwise LR multipliers (per-layer LR scaling linear ramp 0.5x-1.5x across depth)	optimizer	MEDIUM	arxiv 2502.19002 ICML 2025 sharpness disparity; ~2x speedup	compatible with Muon+AdamW groups
 d5e6f7	pending	Cyclical LR / warm restarts (2-3 mini warmup-decay cycles)	training	MEDIUM	never tried multi-cycle schedule; could escape local minima	risky: less warmdown per cycle
