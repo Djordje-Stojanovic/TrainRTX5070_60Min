@@ -381,7 +381,7 @@ class CausalSelfAttention(nn.Module):
         k_pass_shifted[:, 0] = k_pass[:, 0]  # keep first position unchanged
         k = torch.cat([k_rot, k_pass_shifted], dim=-1)
         q, k = norm(q), norm(k)
-        q = q * self.q_scale[None, None, :, None]  # per-head scale after QK-norm
+        q = q * self.q_scale.to(q.dtype)[None, None, :, None]  # per-head scale after QK-norm
 
         q = q.transpose(1, 2)  # (B, H, T, D)
         k = k.transpose(1, 2)  # (B, KVH, T, D)
