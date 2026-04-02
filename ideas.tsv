@@ -1,2 +1,5 @@
 id	status	idea	category	impact	evidence	notes
-d5e6f7	pending	Cyclical LR / warm restarts (2-3 mini warmup-decay cycles)	training	MEDIUM	never tried multi-cycle schedule; could escape local minima	risky: less warmdown per cycle
+a9d59b	trying	Value embedding weight decay 0.0->0.1 (regularize VE table)	hyperparameter	MEDIUM	nanochat autoresearch found VE 'really likes regularization'; ICLR 2026 adaptive regularization paper	simple one-line change
+a3a31d	pending	EMBEDDING_LR 0.4->0.3 + UNEMBEDDING_LR 0.004->0.008 (nanochat defaults)	hyperparameter	MEDIUM	nanochat uses embed_lr=0.3 unembed_lr=0.008 as tuned defaults	both are AdamW param LR changes (same category)
+9e5d64	pending	Attention Q scale per-head: learnable scalar init=1.0 after QK-norm	architecture	MEDIUM	nanochat autoresearch found QKnorm scaler helps; exp#77 init=0.2 was too low	different from exp#77 (scalar not 0.2) and exp#121 (per-dim crashed)
+233146	pending	Muon momentum warmup 0.85->0.95 during warmup phase	training	LOW	nanochat uses momentum schedule 0.85->0.97->0.90; exp#123 cooldown was marginal	only change warmup phase not cooldown
