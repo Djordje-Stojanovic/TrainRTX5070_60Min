@@ -613,7 +613,7 @@ class GPT(nn.Module):
                         weight_decay=weight_decay,
                     )
                 )
-        print(f"Blockwise LR ramp: {lo:.2f}x (layer 0) → {hi:.2f}x (layer {num_layers-1})")
+        print(f"Blockwise LR ramp: {lo:.2f}x (layer 0) -> {hi:.2f}x (layer {num_layers-1})")
         optimizer = MuonAdamW(param_groups)
         for group in optimizer.param_groups:
             group["initial_lr"] = group["lr"]
