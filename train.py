@@ -543,11 +543,19 @@ class GPT(nn.Module):
 
     def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02,
                         weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5,
-                        c_proj_lr_mult=1.0):
+                        c_proj_lr_mult=1.0, layer_lr_ramp=(0.5, 1.5)):
         model_dim = self.config.n_embd
-        # Separate MLP c_proj params for optional LR multiplier
-        mlp_cproj_ids = {id(block.mlp.c_proj.weight) for block in self.transformer.h}
+        num_layers = len(self.transformer.h)
+        # Collect per-layer params (matrix vs MLP c_proj)
+        per_layer_matrix = []  # per-layer non-cproj matrix params
+        per_layer_cproj = []   # per-layer MLP c_proj params
+        for block in self.transformer.h:
+            cproj_id = id(block.mlp.c_proj.weight)
+            layer_matrix = [p for p in block.parameters() if id(p) != cproj_id]
+            per_layer_matrix.append(layer_matrix)
+            per_layer_cproj.append([block.mlp.c_proj.weight])
         all_h_params = list(self.transformer.h.parameters())
+        mlp_cproj_ids = {id(block.mlp.c_proj.weight) for block in self.transformer.h}
         matrix_params = [p for p in all_h_params if id(p) not in mlp_cproj_ids]
         mlp_cproj_params = [p for p in all_h_params if id(p) in mlp_cproj_ids]
         embedding_params = list(self.transformer.wte.parameters())
@@ -573,39 +581,39 @@ class GPT(nn.Module):
             dict(kind="adamw", params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
         ]
+        # Blockwise LR: linear ramp across layers (sharpness disparity principle)
+        lo, hi = layer_lr_ramp
         muon_group_chunk = 8
-        for shape in sorted({p.shape for p in matrix_params}):
-            group_params = [p for p in matrix_params if p.shape == shape]
-            for ci in range(0, len(group_params), muon_group_chunk):
-                chunk = group_params[ci:ci + muon_group_chunk]
+        for layer_idx, (layer_m, layer_c) in enumerate(zip(per_layer_matrix, per_layer_cproj)):
+            layer_scale = lo + (hi - lo) * layer_idx / max(num_layers - 1, 1)
+            # Matrix params (non-cproj) for this layer
+            for shape in sorted({p.shape for p in layer_m}):
+                group_params = [p for p in layer_m if p.shape == shape]
                 param_groups.append(
                     dict(
                         kind="muon",
-                        params=chunk,
-                        lr=matrix_lr,
+                        params=group_params,
+                        lr=matrix_lr * layer_scale,
                         momentum=0.95,
                         ns_steps=5,
                         beta2=0.98,
                         weight_decay=weight_decay,
                     )
                 )
-        # MLP c_proj with optional LR multiplier
-        if mlp_cproj_params:
-            for shape in sorted({p.shape for p in mlp_cproj_params}):
-                group_params = [p for p in mlp_cproj_params if p.shape == shape]
-                for ci in range(0, len(group_params), muon_group_chunk):
-                    chunk = group_params[ci:ci + muon_group_chunk]
-                    param_groups.append(
-                        dict(
-                            kind="muon",
-                            params=chunk,
-                            lr=matrix_lr * c_proj_lr_mult,
-                            momentum=0.95,
-                            ns_steps=5,
-                            beta2=0.98,
-                            weight_decay=weight_decay,
-                        )
+            # MLP c_proj for this layer (with both layer scale and c_proj multiplier)
+            for p in layer_c:
+                param_groups.append(
+                    dict(
+                        kind="muon",
+                        params=[p],
+                        lr=matrix_lr * c_proj_lr_mult * layer_scale,
+                        momentum=0.95,
+                        ns_steps=5,
+                        beta2=0.98,
+                        weight_decay=weight_decay,
                     )
+                )
+        print(f"Blockwise LR ramp: {lo:.2f}x (layer 0) → {hi:.2f}x (layer {num_layers-1})")
         optimizer = MuonAdamW(param_groups)
         for group in optimizer.param_groups:
             group["initial_lr"] = group["lr"]
