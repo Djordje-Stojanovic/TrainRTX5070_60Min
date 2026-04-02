@@ -1,5 +1,4 @@
 id	status	idea	category	impact	evidence	notes
 2661b7	pending	Multi-head Latent Attention (MLA): compress KV into low-rank latent (192 dims) then project back	architecture	HIGH	DeepSeek-V2/V3 MLA; drastically cuts KV params; more parameter-efficient than MHA	never tried; 6 heads compress to ~192 latent dims; search impl details first
 4a1164	pending	Mamba-2 SSM blocks replacing S-window layers (MMMA pattern)	architecture	HIGH	Jamba/Zamba architectures; Mamba handles local context better than sliding window	requires mamba-ssm package; torch.compile compat unknown; search impl details first
-a3a31d	trying	EMBEDDING_LR 0.4->0.3 + UNEMBEDDING_LR 0.004->0.008 (nanochat defaults)	hyperparameter	MEDIUM	nanochat uses embed_lr=0.3 unembed_lr=0.008 as tuned defaults	both are AdamW param LR changes (same category)
 233146	pending	Muon momentum warmup 0.85->0.95 during warmup phase	training	LOW	nanochat uses momentum schedule 0.85->0.97->0.90; exp#123 cooldown was marginal	only change warmup phase not cooldown
