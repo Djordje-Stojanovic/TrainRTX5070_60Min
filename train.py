@@ -345,6 +345,7 @@ class CausalSelfAttention(nn.Module):
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
         self.ve_gate_channels = 12
         self.ve_gate = nn.Linear(self.ve_gate_channels, self.n_kv_head, bias=False)
+        self.q_scale = nn.Parameter(torch.ones(self.n_head))
         self._mask_cache = {}
 
     def _get_flex_block_mask(self, seq_len, window, device):
@@ -380,6 +381,7 @@ class CausalSelfAttention(nn.Module):
         k_pass_shifted[:, 0] = k_pass[:, 0]  # keep first position unchanged
         k = torch.cat([k_rot, k_pass_shifted], dim=-1)
         q, k = norm(q), norm(k)
+        q = q * self.q_scale[None, None, :, None]  # per-head scale after QK-norm
 
         q = q.transpose(1, 2)  # (B, H, T, D)
         k = k.transpose(1, 2)  # (B, KVH, T, D)
@@ -545,11 +547,14 @@ class GPT(nn.Module):
                         weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5,
                         c_proj_lr_mult=1.0):
         model_dim = self.config.n_embd
-        # Separate MLP c_proj params for optional LR multiplier
+        # Separate MLP c_proj params and 1D scalar params (q_scale) from matrix params
         mlp_cproj_ids = {id(block.mlp.c_proj.weight) for block in self.transformer.h}
+        q_scale_ids = {id(block.attn.q_scale) for block in self.transformer.h}
+        excluded_ids = mlp_cproj_ids | q_scale_ids
         all_h_params = list(self.transformer.h.parameters())
-        matrix_params = [p for p in all_h_params if id(p) not in mlp_cproj_ids]
+        matrix_params = [p for p in all_h_params if id(p) not in excluded_ids]
         mlp_cproj_params = [p for p in all_h_params if id(p) in mlp_cproj_ids]
+        q_scale_params = [p for p in all_h_params if id(p) in q_scale_ids]
         embedding_params = list(self.transformer.wte.parameters())
         value_emb_params = list(self.value_emb.parameters())
         lm_head_params = list(self.lm_head.parameters())
@@ -558,6 +563,7 @@ class GPT(nn.Module):
         assert len(list(self.parameters())) == (
             len(matrix_params)
             + len(mlp_cproj_params)
+            + len(q_scale_params)
             + len(embedding_params)
             + len(value_emb_params)
             + len(lm_head_params)
@@ -572,6 +578,7 @@ class GPT(nn.Module):
             dict(kind="adamw", params=value_emb_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
+            dict(kind="adamw", params=q_scale_params, lr=scalar_lr, betas=adam_betas, eps=1e-10, weight_decay=0.0),
         ]
         muon_group_chunk = 8
         for shape in sorted({p.shape for p in matrix_params}):
