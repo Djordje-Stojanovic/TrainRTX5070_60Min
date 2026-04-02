@@ -1,4 +1,5 @@
 id	status	idea	category	impact	evidence	notes
-2661b7	pending	Multi-head Latent Attention (MLA): compress KV into low-rank latent (192 dims) then project back	architecture	HIGH	DeepSeek-V2/V3 MLA; drastically cuts KV params; more parameter-efficient than MHA	never tried; 6 heads compress to ~192 latent dims; search impl details first
-4a1164	pending	Mamba-2 SSM blocks replacing S-window layers (MMMA pattern)	architecture	HIGH	Jamba/Zamba architectures; Mamba handles local context better than sliding window	requires mamba-ssm package; torch.compile compat unknown; search impl details first
-233146	pending	Muon momentum warmup 0.85->0.95 during warmup phase	training	LOW	nanochat uses momentum schedule 0.85->0.97->0.90; exp#123 cooldown was marginal	only change warmup phase not cooldown
+9c1a5a	trying	More MLP-only layers: add layer 10 to MLP-only set {10,12,13,14}	architecture	MEDIUM	MLP-only {12,13,14} improved throughput 7%; adding layer 10 should give more	layer 10 is S-layer; keep L-layers (3,7,11,15) with attention
+810b28	pending	Wider MLP in MLP-only layers: hidden 2048->3072 for layers 12-14	architecture	MEDIUM	VRAM freed by MLP-only (10.0 vs 10.5GB) allows wider MLP; same total params as pre-MLP-only	adds ~7M params back to 229M; more capacity where attention was removed
+fa7e30	pending	Attention c_proj 2x LR (like MLP c_proj 2x LR which improved +0.004)	hyperparameter	MEDIUM	MLP c_proj 2x LR worked; attention c_proj serves same output projection role	simple optimizer group change
+2661b7	pending	Multi-head Latent Attention (MLA): compress KV into low-rank latent	architecture	LOW	DeepSeek MLA; primarily inference optimization; low-rank may hurt quality at 200M	risky at our scale; deprioritized
