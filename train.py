@@ -313,7 +313,6 @@ class GPTConfig:
     use_activation_checkpointing: bool = False
     compute_dtype: torch.dtype = torch.bfloat16
     mlp_only_layers: tuple = ()
-    mlp_only_hidden: int = 0  # wider MLP hidden for MLP-only layers (0 = use default)
 
 
 def norm(x):
@@ -403,9 +402,9 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, config, hidden_override=0):
+    def __init__(self, config):
         super().__init__()
-        hidden = hidden_override if hidden_override > 0 else ((int(config.n_embd * 8 / 3) + 63) // 64) * 64
+        hidden = ((int(config.n_embd * 8 / 3) + 63) // 64) * 64
         self.c_gate = nn.Linear(config.n_embd, hidden, bias=False)
         self.c_up = nn.Linear(config.n_embd, hidden, bias=False)
         self.c_proj = nn.Linear(hidden, config.n_embd, bias=False)
@@ -420,8 +419,7 @@ class Block(nn.Module):
         self.mlp_only = mlp_only
         if not mlp_only:
             self.attn = CausalSelfAttention(config, layer_idx)
-        mlp_hidden = config.mlp_only_hidden if mlp_only else 0
-        self.mlp = MLP(config, hidden_override=mlp_hidden)
+        self.mlp = MLP(config)
         self.use_mlp_checkpointing = config.use_activation_checkpointing
 
     def forward(self, x, cos_sin, window_size, ve=None):
@@ -825,7 +823,6 @@ FINAL_LR_FRAC = 0.1
 # Model size + memory defaults
 DEPTH = 16
 MLP_ONLY_LAYERS = {12, 13, 14}  # S-layers replaced with MLP-only for throughput
-MLP_ONLY_HIDDEN = 3072  # wider MLP hidden for MLP-only layers (default 2048)
 DEVICE_BATCH_SIZE = 16
 EVAL_BATCH_SIZE = 8
 
@@ -849,7 +846,6 @@ def build_model_config(depth, vocab_size, runtime, use_activation_checkpointing=
         use_activation_checkpointing=use_activation_checkpointing,
         compute_dtype=runtime.amp_dtype,
         mlp_only_layers=tuple(MLP_ONLY_LAYERS) if MLP_ONLY_LAYERS else (),
-        mlp_only_hidden=MLP_ONLY_HIDDEN,
     )
 
 
