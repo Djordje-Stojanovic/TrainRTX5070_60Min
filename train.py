@@ -367,13 +367,10 @@ class CausalSelfAttention(nn.Module):
         q = self.c_q(x).view(B, T, self.n_head, self.head_dim)
         k = self.c_k(x).view(B, T, self.n_kv_head, self.head_dim)
         v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
-        # Always compute gate to maintain gradient flow for Muon optimizer
-        gate = 3 * torch.sigmoid(self.ve_gate(x[..., :self.ve_gate_channels]))  # (B, T, n_kv_head)
         if ve is not None:
             ve = ve.view(B, T, self.n_kv_head, self.head_dim)
+            gate = 3 * torch.sigmoid(self.ve_gate(x[..., :self.ve_gate_channels]))  # (B, T, n_kv_head)
             v = v + gate.unsqueeze(-1) * ve
-        else:
-            v = v + 0 * gate.unsqueeze(-1)  # dummy to keep gradient path
 
         cos, sin = cos_sin
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
@@ -637,13 +634,10 @@ class GPT(nn.Module):
         x = norm(x)
         x0 = x
         ve = self.value_emb(idx)
-        # Alternating VE: apply to even attention layers + last layer (nanochat pattern)
-        n_layer = self.config.n_layer
         for i, block in enumerate(self.transformer.h):
             x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
             window_size = self.window_sizes[i]
-            use_ve = (i % 2 == 0 or i == n_layer - 1) and not block.mlp_only
-            x = block(x, cos_sin, window_size, ve=ve if use_ve else None)
+            x = block(x, cos_sin, window_size, ve=ve)
         x = norm(x)
 
         softcap = 15
