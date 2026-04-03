@@ -634,10 +634,13 @@ class GPT(nn.Module):
         x = norm(x)
         x0 = x
         ve = self.value_emb(idx)
+        # Alternating VE: apply to even attention layers + last layer (nanochat pattern)
+        n_layer = self.config.n_layer
         for i, block in enumerate(self.transformer.h):
             x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
             window_size = self.window_sizes[i]
-            x = block(x, cos_sin, window_size, ve=ve)
+            use_ve = (i % 2 == 0 or i == n_layer - 1) and not block.mlp_only
+            x = block(x, cos_sin, window_size, ve=ve if use_ve else None)
         x = norm(x)
 
         softcap = 15

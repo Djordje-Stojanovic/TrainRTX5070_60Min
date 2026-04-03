@@ -1,5 +1,5 @@
 id	status	idea	category	impact	evidence	notes
 8c331e	pending	Sqrt warmdown shape replacing cosine: LR *= 1-sqrt(progress) during warmdown	training_dynamics	MEDIUM	arxiv 2508.01483 shows sqrt/lowered-linear outperform cosine in bias-variance tradeoff	linear warmdown was worse (-0.007) but sqrt is different shape
 fa7e30	pending	Attention c_proj 2x LR (like MLP c_proj 2x LR which improved +0.004)	hyperparameter	MEDIUM	MLP c_proj 2x LR worked; attention c_proj serves same output projection role	simple optimizer group change
-9aca50	pending	Alternating value embeddings: apply VE to even attention layers + last layer only	architecture	MEDIUM	nanochat uses alternating VE pattern; reduces VE overhead 50%	nanochat validated approach
+9aca50	trying	Alternating value embeddings: apply VE to even attention layers + last layer only	architecture	MEDIUM	nanochat uses alternating VE pattern; reduces VE overhead 50%	nanochat validated approach
 51dc1c	pending	FINAL_LR_FRAC 0.1→0.01: lower minimum LR for finer convergence in warmdown	training_dynamics	LOW	0.0 was worse but 0.01 untested; longer warmdown (0.7) benefits from lower floor	simple single-value change
