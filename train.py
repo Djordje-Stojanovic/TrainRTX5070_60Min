@@ -455,6 +455,12 @@ class GPT(nn.Module):
             "wte": nn.Embedding(config.vocab_size, config.n_embd),
             "h": nn.ModuleList([Block(config, i, mlp_only=(i in config.mlp_only_layers)) for i in range(config.n_layer)]),
         })
+        # Recurrent depth: share MLP weights across MLP-only layers for weight reuse
+        mlp_only_list = sorted(config.mlp_only_layers)
+        if len(mlp_only_list) > 1:
+            shared_mlp = self.transformer.h[mlp_only_list[0]].mlp
+            for idx in mlp_only_list[1:]:
+                self.transformer.h[idx].mlp = shared_mlp
         kv_dim = config.n_kv_head * (config.n_embd // config.n_head)
         self.value_emb = nn.Embedding(config.vocab_size, kv_dim)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
